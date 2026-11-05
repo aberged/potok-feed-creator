@@ -1,0 +1,263 @@
+@import "tailwindcss";
+
+/* daisyUI components with the `d-` prefix, without themes: the colors come
+   from the potok page's theme (the frame follows its data-theme), and
+   src/dev-theme.css stands in for it in dev. Without the prefix the page's
+   own daisyUI rules would reach the app's elements. */
+@plugin "daisyui" {
+  themes: false;
+  prefix: "d-";
+}
+
+/* The frame loads the page's CSS, which paints the body. The app sits on the
+   background of the group page instead, like a description in text does. */
+html,
+body {
+  background: transparent;
+}
+
+.fc {
+  color: var(--color-base-content);
+  display: flex;
+  flex-direction: column;
+  inset: 0;
+  position: fixed;
+}
+
+.fc-header {
+  align-items: center;
+  border-bottom: 1px solid var(--color-base-300);
+  display: flex;
+  flex-shrink: 0;
+  gap: 0.75rem;
+  padding: 0.625rem 1rem;
+}
+
+.fc-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+}
+
+.fc-column {
+  margin-inline: auto;
+  max-width: 42rem;
+  padding: 1rem;
+}
+
+.fc-link {
+  color: inherit;
+  cursor: pointer;
+  font-size: 0.875rem;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+}
+
+.fc-card,
+.fc-setup {
+  border: 1px solid var(--color-base-300);
+  border-radius: var(--radius-box);
+  padding: 0.75rem 1rem;
+}
+
+.fc-setup {
+  background: color-mix(in oklab, var(--color-warning) 12%, transparent);
+  border-color: color-mix(in oklab, var(--color-warning) 45%, transparent);
+}
+
+.fc-row {
+  align-items: center;
+  border-radius: var(--radius-box);
+  cursor: pointer;
+  display: flex;
+  gap: 0.75rem;
+  padding: 0.5rem;
+  transition: background-color 120ms ease;
+  width: 100%;
+}
+
+.fc-row:hover,
+.fc-row:focus-visible {
+  background: var(--color-base-200);
+}
+
+/* The formats are shown by the real thing, in small. A template has no way to
+   ask for a width of its own, so the page inside is a phone's. */
+.fc-template-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  max-width: 56rem;
+}
+
+.fc-template {
+  background: var(--color-base-100);
+  border: 1px solid var(--color-base-300);
+  border-radius: var(--radius-box);
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  text-align: start;
+  transition:
+    border-color 120ms ease,
+    transform 120ms ease;
+}
+
+.fc-template:hover,
+.fc-template:focus-visible {
+  border-color: var(--color-primary);
+}
+
+.fc-template:active {
+  transform: scale(0.98);
+}
+
+.fc-template-current {
+  border-color: var(--color-primary);
+  box-shadow: inset 0 0 0 1px var(--color-primary);
+}
+
+.fc-thumb {
+  border-bottom: 1px solid var(--color-base-300);
+  display: block;
+  height: 8.5rem;
+  overflow: hidden;
+  position: relative;
+}
+
+.fc-thumb-page {
+  display: block;
+  font-size: 1rem;
+  left: 0.5rem;
+  pointer-events: none;
+  position: absolute;
+  top: 0.5rem;
+  transform: scale(0.42);
+  transform-origin: top left;
+  width: 22rem;
+}
+
+/* One column, and the tab on a phone says which half is on screen. */
+.fc-editor {
+  display: grid;
+  margin-inline: auto;
+  max-width: 42rem;
+}
+
+.fc-form,
+.fc-preview {
+  min-width: 0;
+  padding: 1rem;
+}
+
+.fc-editor[data-tab="write"] .fc-preview,
+.fc-editor[data-tab="preview"] .fc-form {
+  display: none;
+}
+
+@media (min-width: 56rem) {
+  .fc-tabs {
+    display: none;
+  }
+
+  .fc-editor {
+    gap: 0.5rem;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    max-width: 76rem;
+  }
+
+  .fc-editor[data-tab] .fc-form,
+  .fc-editor[data-tab] .fc-preview {
+    display: block;
+  }
+
+  .fc-preview {
+    align-self: start;
+    position: sticky;
+    top: 0;
+  }
+}
+
+.fc-preview-card {
+  background: var(--color-base-100);
+  border: 1px solid var(--color-base-300);
+  border-radius: var(--radius-box);
+  margin-top: 0.375rem;
+  padding: 1.25rem;
+}
+
+.fc-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.fc-label {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.fc-hint {
+  font-size: 0.8125rem;
+  line-height: 1.35;
+  opacity: 0.7;
+}
+
+.fc-textarea {
+  field-sizing: content;
+  max-height: 24rem;
+}
+
+.fc-image {
+  align-self: flex-start;
+  max-width: 16rem;
+  position: relative;
+}
+
+.fc-image img {
+  border-radius: var(--radius-box);
+  display: block;
+  max-height: 10rem;
+  object-fit: cover;
+}
+
+.fc-image button {
+  inset-block-start: 0.25rem;
+  inset-inline-end: 0.25rem;
+  position: absolute;
+}
+
+.fc-bar {
+  align-items: center;
+  background: var(--color-base-100);
+  border-top: 1px solid var(--color-base-300);
+  display: flex;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  padding: 0.625rem 1rem;
+}
+
+.fc-switch {
+  align-items: flex-start;
+  cursor: pointer;
+  display: flex;
+  gap: 0.75rem;
+}
+
+.fc-reach {
+  background: var(--color-base-200);
+  border-radius: var(--radius-box);
+  display: grid;
+  font-size: 0.875rem;
+  gap: 0.125rem 0.75rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: 0.625rem 0.875rem;
+}
+
+.fc-reach dt {
+  font-weight: 600;
+}
