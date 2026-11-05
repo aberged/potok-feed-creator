@@ -1,3 +1,4 @@
+import { escapeHtml, summary } from './html';
 import type { PotokContentFormat } from './potok';
 import { isTemplateId, templateOf, type PostFields, type TemplateId } from './templates';
 
@@ -7,10 +8,14 @@ import { isTemplateId, templateOf, type PostFields, type TemplateId } from './te
 // takes it out of everything a viewer gets.
 //
 //   <!--potok-post {"v":1,"template":"quote","fields":{...},"hash":"1a2b3c4d"}-->
-//   <blockquote style="...">...</blockquote>
+//   <meta name="description" content="..."><blockquote style="...">...</blockquote>
 //
 // `hash` is that of the HTML below it, which tells if someone changed the text
 // by hand in the group's settings. A form built from `fields` would undo that.
+//
+// The meta tag is what the card of a shared link says. Potok reads it, as its own
+// reading of the HTML would run a kicker, a caption and the text together, and
+// the sanitizer keeps it from viewers too.
 
 export type Post = { template: TemplateId; fields: PostFields };
 
@@ -47,8 +52,13 @@ function commentSafe(json: string): string {
   return json.replace(/</g, '\\u003c').replace(/>/g, '\\u003e').replace(/--/g, '-\\u002d');
 }
 
+function cardTag(text: string): string {
+  const content = summary(text);
+  return content ? `<meta name="description" content="${escapeHtml(content)}">` : '';
+}
+
 export function encodePost({ template, fields }: Post, format: PotokContentFormat = 'markdown'): Description {
-  const { title, render } = templateOf(template);
+  const { title, render, card } = templateOf(template);
   const name = title(fields);
 
   // Free text is the description itself, and needs nothing to come back from.
@@ -56,7 +66,7 @@ export function encodePost({ template, fields }: Post, format: PotokContentForma
     return { name, description: render(fields), descriptionFormat: format };
   }
 
-  const html = render(fields);
+  const html = `${cardTag(card(fields))}${render(fields)}`;
   const marker = commentSafe(JSON.stringify({ v: 1, template, fields, hash: hashOf(html) }));
 
   return { name, description: `<!--potok-post ${marker}-->\n${html}`, descriptionFormat: 'html' };

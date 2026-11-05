@@ -42,6 +42,91 @@ describe('encodePost', () => {
   });
 });
 
+describe('the card of a shared link', () => {
+  const cardOf = (template: TemplateId, fields: PostFields) =>
+    encodePost(post(template, fields)).description.match(/<meta name="description" content="([^"]*)">/)?.[1];
+
+  it('takes the lead of an article, with nothing of its kicker or caption', () => {
+    const card = cardOf('article', {
+      kicker: 'Iz kraja',
+      title: 'Desilo se čudo',
+      lead: 'Dunavom plivaju zmajevi.',
+      caption: 'chatgpt',
+      body: 'Pred zalazak sunca izronio je zmaj.',
+    });
+
+    expect(card).toBe('Dunavom plivaju zmajevi.');
+  });
+
+  it('falls back on the text of an article without a lead', () => {
+    expect(cardOf('article', { kicker: 'Iz kraja', title: 'Naslov', body: 'Prvi pasus.\n\nDrugi pasus.' })).toBe(
+      'Prvi pasus. Drugi pasus.',
+    );
+  });
+
+  it('says what each format has to say', () => {
+    expect(cardOf('photo', { title: 'Jutro', about: 'Pre izlaska sunca.' })).toBe('Pre izlaska sunca.');
+    expect(cardOf('quote', { quote: 'Reka', author: 'Izreka', source: 'Stara knjiga' })).toBe('Izreka, Stara knjiga');
+    expect(cardOf('list', { title: 'Tri', intro: 'Za vikend.', items: ['a', 'b'] })).toBe('Za vikend.');
+    expect(cardOf('list', { title: 'Tri', items: ['Pijaca', ' ', 'Obala'] })).toBe('Pijaca, Obala');
+    expect(cardOf('link', { title: 'Vredi', address: 'https://www.example.com/a' })).toBe('example.com');
+    expect(cardOf('link', { title: 'Vredi', address: 'https://a.b', about: 'Kratko.' })).toBe('Kratko.');
+    expect(cardOf('notice', { level: 'urgent', title: 'Voda', body: 'Od 8 do 12.' })).toBe('Hitno: Od 8 do 12.');
+    expect(cardOf('notice', { title: 'Voda' })).toBe('Obaveštenje');
+    expect(cardOf('question', { question: 'Zašto?', about: 'Javi nam se.' })).toBe('Javi nam se.');
+  });
+
+  it('says when and where an event is', () => {
+    const fields = { title: 'Čišćenje', date: '2026-11-14', time: '10:00', place: 'Kod mosta', about: 'Ponesi rukavice.' };
+
+    expect(cardOf('event', fields)).toBe('subota, 14. novembar 2026. u 10:00 · Kod mosta · Ponesi rukavice.');
+  });
+
+  it('writes nothing where there is nothing to say', () => {
+    expect(cardOf('question', { question: 'Zašto?' })).toBeUndefined();
+    expect(cardOf('article', { kicker: 'Iz kraja', title: 'Naslov' })).toBeUndefined();
+    expect(cardOf('photo', { title: 'Jutro' })).toBeUndefined();
+  });
+
+  it('leaves free text to Potok', () => {
+    expect(encodePost(post('text', { title: 'Naslov', source: '# Tekst' })).description).toBe('# Tekst');
+  });
+
+  it('takes the marks out of the text', () => {
+    expect(cardOf('photo', { title: 'a', about: '**Jako**, *tiho* i [link](https://a.b) na https://c.d.' })).toBe(
+      'Jako, tiho i link na https://c.d.',
+    );
+  });
+
+  it('cuts a long text between words', () => {
+    const card = cardOf('photo', { title: 'a', about: 'reč '.repeat(100) })!;
+
+    expect(card.length).toBeLessThanOrEqual(200);
+    expect(card.endsWith('reč…')).toBe(true);
+  });
+
+  it('cannot break out of the tag', () => {
+    expect(cardOf('photo', { title: 'a', about: '"><script>alert(1)</script>' })).toBe(
+      '&quot;&gt;&lt;script&gt;alert(1)&lt;/script&gt;',
+    );
+  });
+
+  it('counts as part of the post, so nothing looks changed by hand', () => {
+    const original = post('article', { title: 'Naslov', lead: 'Uvod.' });
+    const { description, descriptionFormat } = encodePost(original);
+
+    expect(decodePost(description, descriptionFormat)).toEqual({ kind: 'post', post: original });
+  });
+
+  it('leaves a post made before it as it was', () => {
+    const fields = { title: 'Naslov', lead: 'Uvod.' };
+    const html = '<article><h1>Naslov</h1></article>';
+    const old = `<!--potok-post ${JSON.stringify({ v: 1, template: 'article', fields, hash: hashOf(html) })}-->\n${html}`;
+
+    expect(decodePost(old, 'html')).toEqual({ kind: 'post', post: post('article', fields) });
+  });
+});
+
 describe('decodePost', () => {
   it('brings every format back from its description', () => {
     for (const template of TEMPLATES.filter(({ id }) => id !== 'text')) {

@@ -90,6 +90,21 @@ export function paragraphs(text: string, style = '', options: TextOptions = {}):
     .join('');
 }
 
+/** A text without its marks, on one line and cut between words, for the card of a shared link. */
+export function summary(text: string, length = 200): string {
+  const clean = text
+    .replace(INLINE, (whole, label, _href, bold, italic, bare) => bold ?? italic ?? label ?? bare ?? whole)
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (clean.length <= length) return clean;
+
+  const cut = clean.slice(0, length - 1);
+  const space = cut.lastIndexOf(' ');
+
+  return `${(space > 0 ? cut.slice(0, space) : cut).replace(/[\s,;:]+$/, '')}…`;
+}
+
 /** The name of a group is at most 120 characters. */
 export function clip(text: string, length = 120): string {
   const clean = text.replace(/\s+/g, ' ').trim();

@@ -45,6 +45,8 @@ export type Template = {
   /** The name of the group. */
   title: (fields: PostFields) => string;
   render: (fields: PostFields) => string;
+  /** What the card of a shared link says under the name. Nothing leaves it to Potok. */
+  card: (fields: PostFields) => string;
 };
 
 export const MAX_ITEMS = 10;
@@ -76,6 +78,8 @@ const items = (fields: PostFields, key: string): string[] => {
   const value = fields[key];
   return Array.isArray(value) ? value.map((item) => item.trim()).filter((item) => item !== '') : [];
 };
+
+const levelOf = (fields: PostFields) => LEVELS[text(fields, 'level') as NoticeLevel] ?? LEVELS.info;
 
 /** What sets a title apart from `.rich-content`, which underlines an h1 and an h2. */
 const HEADING = 'border: none; padding: 0;';
@@ -146,15 +150,20 @@ function eventDate(value: string): { day: number; month: string; weekday: string
   return { day, month: MONTHS[month - 1], weekday: WEEKDAYS[date.getDay()], year };
 }
 
-function event(fields: PostFields): string {
+function eventWhen(fields: PostFields): string {
   const date = eventDate(text(fields, 'date'));
   const time = text(fields, 'time');
-  const place = text(fields, 'place');
-  const more = safeHref(text(fields, 'more'));
 
-  const when = [date ? `${date.weekday}, ${date.day}. ${date.month} ${date.year}.` : '', time && `u ${time}`]
+  return [date ? `${date.weekday}, ${date.day}. ${date.month} ${date.year}.` : '', time && `u ${time}`]
     .filter(Boolean)
     .join(' ');
+}
+
+function event(fields: PostFields): string {
+  const date = eventDate(text(fields, 'date'));
+  const place = text(fields, 'place');
+  const more = safeHref(text(fields, 'more'));
+  const when = eventWhen(fields);
 
   // In a div: a table cell takes no `border-radius` with `border-collapse: collapse`,
   // and the sanitizer does not know `separate`.
@@ -210,7 +219,7 @@ function link(fields: PostFields): string {
 }
 
 function notice(fields: PostFields): string {
-  const level = LEVELS[text(fields, 'level') as NoticeLevel] ?? LEVELS.info;
+  const level = levelOf(fields);
 
   return [
     `<section style="background-color: ${level.background}; color: ${level.text}; border-left: 6px solid ${level.line}; border-radius: 14px; padding: 20px;">`,
@@ -253,6 +262,7 @@ export const TEMPLATES: Template[] = [
     },
     title: (fields) => clip(text(fields, 'title')),
     render: article,
+    card: (fields) => text(fields, 'lead') || text(fields, 'body'),
   },
   {
     id: 'photo',
@@ -266,6 +276,7 @@ export const TEMPLATES: Template[] = [
     sample: { image: WAITING_IMAGE, title: 'Jutro na obali', about: 'Snimljeno pre izlaska sunca.' },
     title: (fields) => clip(text(fields, 'title')),
     render: photo,
+    card: (fields) => text(fields, 'about'),
   },
   {
     id: 'quote',
@@ -279,6 +290,7 @@ export const TEMPLATES: Template[] = [
     sample: { quote: 'Reka nosi sve što joj se da.', author: 'Stara izreka' },
     title: (fields) => clip(text(fields, 'quote')),
     render: quote,
+    card: (fields) => [text(fields, 'author'), text(fields, 'source')].filter(Boolean).join(', '),
   },
   {
     id: 'event',
@@ -295,6 +307,8 @@ export const TEMPLATES: Template[] = [
     sample: { title: 'Čišćenje obale', date: '2026-11-14', time: '10:00', place: 'Kod starog mosta' },
     title: (fields) => clip(text(fields, 'title')),
     render: event,
+    card: (fields) =>
+      [eventWhen(fields), text(fields, 'place'), text(fields, 'about')].filter(Boolean).join(' · '),
   },
   {
     id: 'list',
@@ -308,6 +322,7 @@ export const TEMPLATES: Template[] = [
     sample: { title: 'Tri stvari za vikend', items: ['Prošetaj uz potok', 'Poseti pijacu', 'Javi se komšiji'] },
     title: (fields) => clip(text(fields, 'title')),
     render: list,
+    card: (fields) => text(fields, 'intro') || items(fields, 'items').slice(0, MAX_ITEMS).join(', '),
   },
   {
     id: 'link',
@@ -322,6 +337,7 @@ export const TEMPLATES: Template[] = [
     sample: { address: 'https://example.com/clanak', title: 'Vredi pročitati', about: 'Kratak tekst o našem kraju.' },
     title: (fields) => clip(text(fields, 'title')),
     render: link,
+    card: (fields) => text(fields, 'about') || hostOf(safeHref(text(fields, 'address'))),
   },
   {
     id: 'notice',
@@ -335,6 +351,7 @@ export const TEMPLATES: Template[] = [
     sample: { level: 'important', title: 'Nema vode u utorak', body: 'Od 8 do 12 časova.' },
     title: (fields) => clip(text(fields, 'title')),
     render: notice,
+    card: (fields) => [levelOf(fields).label, text(fields, 'body')].filter(Boolean).join(': '),
   },
   {
     id: 'question',
@@ -347,6 +364,7 @@ export const TEMPLATES: Template[] = [
     sample: { question: 'Šta bi promenio u našem kraju?', about: 'Javi nam se.' },
     title: (fields) => clip(text(fields, 'question')),
     render: question,
+    card: (fields) => text(fields, 'about'),
   },
   {
     id: 'text',
@@ -359,6 +377,7 @@ export const TEMPLATES: Template[] = [
     sample: { title: 'Slobodan tekst', source: 'Pišeš kako želiš.' },
     title: (fields) => clip(text(fields, 'title')),
     render: (fields) => text(fields, 'source'),
+    card: () => '',
   },
 ];
 
