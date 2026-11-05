@@ -85,7 +85,7 @@ function fakeApi(posts: PotokSubgroup[] = []) {
     getCurrentProfile: vi.fn<PotokSdk['getCurrentProfile']>(async () => ({ id: 1 }) as never),
     listChildren: vi.fn<PotokSdk['listChildren']>(async ({ beforeId } = {}) => {
       const rows = posts.filter((post) => beforeId === undefined || post.id < beforeId);
-      return { ok: true, groups: rows.slice(0, PAGE_SIZE), has_more: rows.length > PAGE_SIZE };
+      return { ok: true, groups: rows.slice(0, PAGE_SIZE), has_more: rows.length > PAGE_SIZE, has_newer: false };
     }),
     getChild: vi.fn<PotokSdk['getChild']>(async (id) => ({ ok: true, group: child(id) })),
     createChild: vi.fn<PotokSdk['createChild']>(async (attrs) => written(nextId++, attrs)),
@@ -577,6 +577,7 @@ describe('a call that never answers', () => {
       ok: true,
       groups: [child(900, { name: 'Reka nosi sve.' })],
       has_more: false,
+      has_newer: false,
     });
 
     await creator.savePost();
@@ -599,6 +600,7 @@ describe('a call that never answers', () => {
       ok: true,
       groups: [child(900, { name: 'Reka nosi sve.', creator_id: 2 })],
       has_more: false,
+      has_newer: false,
     });
 
     await creator.savePost();
