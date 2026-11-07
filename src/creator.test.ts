@@ -23,6 +23,7 @@ const own: PotokOwnGroup = {
   can_manage_children: true,
   can_create_children: true,
   everyone_creates_subgroups: false,
+  can_start_polls: false,
 };
 
 function child(id: number, patch: Partial<PotokChild> = {}): PotokChild {
