@@ -1,8 +1,8 @@
 # potok-feed-creator
 
-Potok aplikacija za pisanje i uređivanje objava u feed-u. Stoji u opisu grupe `.feed`, a svaka objava je jedna podgrupa te grupe. Autor bira format, piše tekst i na dugme **Sačuvaj** ili **Objavi** dobija grupu čiji opis [Feed](../potok-feed/README.md) prikazuje u roditeljskoj grupi.
+Potok aplikacija za pisanje i uređivanje objava u feed-u. Stoji u opisu grupe `.feed`, a svaka objava je jedna podgrupa te grupe. Autor bira format, piše tekst i na dugme **Sačuvaj** ili **Objavi** dobija grupu čiji opis [Feed](https://github.com/aberged/potok-feed) prikazuje u roditeljskoj grupi.
 
-Napravljena je po šablonu [potok-vite](../potok-vite/README.md). Aplikacija je jedan fajl, `dist/potok-build.html`, koji se nalepi kao opis grupe sa uključenim „Opis je aplikacija (API)“.
+Napravljena je po šablonu [potok-vite](https://github.com/aberged/potok-vite/tree/align-alt-descriptions). Aplikacija je jedan fajl, `dist/potok-build.html`, koji se nalepi kao opis grupe sa uključenim „Opis je aplikacija (API)“.
 
 Celu sliku, sa pravima, stanjima objave, nasleđivanjem članova i ograničenjima, daje `docs/feed-i-feedcreator.md` u projektu potok-ide. Traži `getGroup`, `listChildren`, `getChild`, `createChild`, `updateChild`, `withdrawChild` i `previewDescription` iz App API-ja, pa radi tek uz verziju potok-a koja ih ima.
 
@@ -92,3 +92,7 @@ Ako se u potok-u promeni `RichContentScrubber`, treba ažurirati i `src/sanitize
 ## Provereno
 
 Na pravom potok-u, u Chrome-u, sa svih devet formata, svetlom i tamnom temom i širinom telefona. Na stvarnim iOS i Android uređajima nije provereno, a najviše treba pogledati izbor slike i tastaturu preko forme.
+
+## Licenca
+
+MIT, vidi [LICENSE](LICENSE).
