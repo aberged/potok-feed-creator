@@ -46,6 +46,10 @@ function child(id: number, template: TemplateId, flags: Partial<PotokChild>): Po
     can_edit: true,
     member_count: 5,
     updated_at: '2026-11-05T08:00:00Z',
+    key: null,
+    lat: null,
+    lng: null,
+    pin: null,
     ...flags,
   };
 }

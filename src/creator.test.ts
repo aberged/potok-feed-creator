@@ -53,6 +53,10 @@ function child(id: number, patch: Partial<PotokChild> = {}): PotokChild {
     can_edit: true,
     member_count: 3,
     updated_at: '2026-11-05T08:00:00Z',
+    key: null,
+    lat: null,
+    lng: null,
+    pin: null,
     ...patch,
   };
 }
