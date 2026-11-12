@@ -12,6 +12,7 @@ const group = (patch: Partial<PotokOwnGroup> = {}): PotokOwnGroup => ({
   can_create_children: true,
   everyone_creates_subgroups: false,
   can_start_polls: false,
+  signed_in: true,
   ...patch,
 });
 

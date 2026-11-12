@@ -727,6 +727,12 @@ const screenView = (creator: Creator, state: CreatorState, ui: Ui, draw: () => v
       return message(
         'Objave uređuju oni koji smeju da menjaju ovu grupu',
         'Aplikacija pravi grupe u ime onoga ko je koristi, pa je dostupna samo njima.',
+        // Someone without an account, at a `.feed` open to guests for its stories.
+        state.group?.signed_in === false
+          ? html`<button id="log-in" class="d-btn d-btn-primary d-btn-sm mt-3" @click=${() => void window.potok.openLogin()}>
+              Prijavi se
+            </button>`
+          : undefined,
       );
     case 'failed':
       return message(
