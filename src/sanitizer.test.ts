@@ -12,6 +12,9 @@ const STYLED_TAGS = new Set(
    ol p pre s section small span strong sub summary sup table tbody td th thead tr u ul`.split(/\s+/),
 );
 
+// The one attribute of Potok's own the server keeps, with its values.
+const VALUED_ATTRIBUTES = new Map([['div data-potok-gallery', new Set(['slides', 'cards', 'cinema', 'polaroid'])]]);
+
 const PLAIN_TAGS = new Map([
   ['a', new Set(['href', 'target', 'rel', 'name', 'title'])],
   ['img', new Set(['src', 'width', 'height', 'title', 'alt'])],
@@ -64,7 +67,11 @@ function refusedMarkup(html: string): string[] {
     if (!plain && !STYLED_TAGS.has(name)) refused.push(`<${name}>`);
 
     for (const [, attribute, value] of attributes.matchAll(/([a-z-]+)="([^"]*)"/g)) {
-      if (attribute === 'style' && !plain) refused.push(...refusedCss(value));
+      const valued = VALUED_ATTRIBUTES.get(`${name} ${attribute}`);
+
+      if (valued) {
+        if (!valued.has(value)) refused.push(`${name} ${attribute}="${value}"`);
+      } else if (attribute === 'style' && !plain) refused.push(...refusedCss(value));
       else if (!plain?.has(attribute)) refused.push(`${name} ${attribute}`);
     }
   }
@@ -95,6 +102,13 @@ const FULL: Partial<Record<TemplateId, PostFields>> = {
   list: { title: 'Naslov', intro: 'Uvod', items: ['prva', 'druga'] },
   link: { address: 'https://a.rs/b', title: 'Naslov', about: 'Opis', image: WAITING_IMAGE },
   question: { question: 'Zašto?', about: 'Dodatak' },
+  gallery: {
+    title: 'Naslov',
+    about: 'Opis',
+    look: 'polaroid',
+    pictures: [WAITING_IMAGE, WAITING_IMAGE],
+    captions: ['**Prva**', 'Druga'],
+  },
 };
 
 describe('what the sanitizer lets through', () => {
@@ -117,6 +131,9 @@ describe('what the sanitizer lets through', () => {
     expect(refusedMarkup('<div class="a"></div>')).toEqual(['div class']);
     expect(refusedMarkup('<img style="width: 50%" src="/a">')).toEqual(['img style']);
     expect(refusedMarkup('<video></video>')).toEqual(['<video>']);
+    expect(refusedMarkup('<div data-potok-gallery="cards"></div>')).toEqual([]);
+    expect(refusedMarkup('<div data-potok-gallery="fixed"></div>')).toEqual(['div data-potok-gallery="fixed"']);
+    expect(refusedMarkup('<p data-potok-gallery="cards"></p>')).toEqual(['p data-potok-gallery']);
     expect(refusedCss('color: #FFFFFF')).toEqual(['color: #FFFFFF']);
     expect(refusedCss('display: flex')).toEqual(['display: flex']);
     expect(refusedCss('display: inline-block')).toEqual(['display: inline-block']);

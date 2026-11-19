@@ -1,12 +1,23 @@
 import { html, nothing, render, svg, type TemplateResult } from 'lit-html';
 import { unsafeHTML } from 'lit-html/directives/unsafe-html.js';
 import { reachOf, setupWarnings, STATE_LABELS, stateOf, type Audience } from './audience';
-import { audienceOf, createCreator, isDraft, missingOf, type Creator, type CreatorState, type Form } from './creator';
+import {
+  audienceOf,
+  createCreator,
+  isDraft,
+  missingOf,
+  pictureRows,
+  type Creator,
+  type CreatorState,
+  type Form,
+} from './creator';
+import { safeImage } from './html';
 import { shrinkImage } from './image';
 import type { PotokSubgroup } from './potok';
 import {
   LEVEL_OPTIONS,
   MAX_ITEMS,
+  MAX_PICTURES,
   TEMPLATES,
   templateOf,
   WAITING_IMAGE,
@@ -38,6 +49,9 @@ const icon = (...paths: string[]) => html`
 const plusIcon = icon('M12 4.5v15m7.5-7.5h-15');
 const backIcon = icon('M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18');
 const closeIcon = icon('M6 18 18 6M6 6l12 12');
+const photoIcon = icon(
+  'm2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909M3.75 21h16.5A2.25 2.25 0 0 0 22.5 18.75V5.25A2.25 2.25 0 0 0 20.25 3H3.75A2.25 2.25 0 0 0 1.5 5.25v13.5A2.25 2.25 0 0 0 3.75 21Z',
+);
 const warningIcon = icon(
   'M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126Z',
   'M12 15.75h.007v.008H12v-.008Z',
@@ -335,6 +349,172 @@ const itemsField = (creator: Creator, form: Form, field: Field) => {
   `;
 };
 
+// The look of a gallery: four tiles, each a sketch of the look Potok draws.
+const lookSketch = (look: string) => {
+  switch (look) {
+    case 'cards':
+      return html`<span class="flex h-10 w-16 items-center gap-1 overflow-hidden" aria-hidden="true">
+        <span class="h-10 w-12 shrink-0 rounded-md bg-current opacity-60"></span>
+        <span class="h-10 w-12 shrink-0 rounded-md bg-current opacity-25"></span>
+      </span>`;
+    case 'cinema':
+      return html`<span class="flex h-10 w-16 items-center justify-center rounded-md bg-neutral-900" aria-hidden="true">
+        <span class="h-6 w-9 rounded-sm bg-neutral-300"></span>
+      </span>`;
+    case 'polaroid':
+      return html`<span class="flex h-10 w-16 items-center justify-center gap-1" aria-hidden="true">
+        <span class="h-9 w-7 -rotate-6 rounded-[2px] bg-white p-[3px] pb-2 shadow ring-1 ring-black/10">
+          <span class="block size-full bg-current opacity-50"></span>
+        </span>
+        <span class="h-9 w-7 rotate-3 rounded-[2px] bg-white p-[3px] pb-2 shadow ring-1 ring-black/10">
+          <span class="block size-full bg-current opacity-30"></span>
+        </span>
+      </span>`;
+    default:
+      return html`<span class="flex h-10 w-16 flex-col items-center gap-1" aria-hidden="true">
+        <span class="h-7 w-16 rounded-md bg-current opacity-60"></span>
+        <span class="flex gap-0.5">
+          <span class="size-1 rounded-full bg-current"></span>
+          <span class="size-1 rounded-full bg-current opacity-40"></span>
+          <span class="size-1 rounded-full bg-current opacity-40"></span>
+        </span>
+      </span>`;
+  }
+};
+
+const choiceField = (creator: Creator, form: Form, field: Field) => {
+  const options = field.options ?? [];
+  const value = textValue(form, field.key);
+  const current = options.some((option) => option.value === value) ? value : options[0]?.value;
+
+  return html`
+    <fieldset class="fc-field" data-field=${field.key}>
+      <legend class="fc-label">${field.label}</legend>
+      <div class="grid grid-cols-[repeat(auto-fill,minmax(5.5rem,1fr))] gap-2">
+        ${options.map(
+          (option) => html`
+            <label
+              class="flex cursor-pointer flex-col items-center gap-2 rounded-box border px-2 py-3 text-sm transition duration-150 hover:bg-base-200 active:scale-[.98] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-primary/40 ${option.value ===
+              current
+                ? 'border-primary bg-primary/5 text-primary'
+                : 'border-base-300'}"
+            >
+              <input
+                class="sr-only"
+                type="radio"
+                name=${field.key}
+                .value=${option.value}
+                .checked=${option.value === current}
+                @change=${() => creator.setField(field.key, option.value)}
+              />
+              ${lookSketch(option.value)}
+              <span class="font-medium">${option.label}</span>
+            </label>
+          `,
+        )}
+      </div>
+    </fieldset>
+  `;
+};
+
+// The pictures of a gallery, each with its caption: an address, or from the
+// device, several at once, sent as soon as they are picked.
+const picturesField = (creator: Creator, form: Form, field: Field) => {
+  const rows = pictureRows(form.fields);
+  const pictures = rows.pictures.length > 0 ? rows.pictures : [''];
+  const captions = rows.pictures.length > 0 ? rows.captions : [''];
+  const uploading = creator.state.uploading > 0;
+  const room = MAX_PICTURES - pictures.filter((picture) => picture.trim() !== '').length;
+
+  const setRow = (index: number, picture: string, caption: string) =>
+    creator.setPictures(
+      pictures.map((row, position) => (position === index ? picture : row)),
+      captions.map((row, position) => (position === index ? caption : row)),
+    );
+
+  const picked = (event: Event) => {
+    const input = event.target as HTMLInputElement;
+    const files = Array.from(input.files ?? []).slice(0, room);
+    input.value = '';
+    void creator.addDevicePictures(files);
+  };
+
+  return html`
+    <div class="fc-field" data-field=${field.key}>
+      <span class="fc-label">${field.label}${field.required ? html`<span aria-hidden="true"> *</span>` : nothing}</span>
+      <ol class="flex flex-col gap-2">
+        ${pictures.map((picture, index) => {
+          const shown = safeImage(picture.trim());
+
+          return html`
+            <li class="flex items-start gap-2 rounded-box border border-base-300 p-2">
+              <span class="flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-field bg-base-200">
+                ${shown ? html`<img class="size-full object-cover" src=${shown} alt="" />` : photoIcon}
+              </span>
+              <div class="flex min-w-0 flex-1 flex-col gap-1">
+                <input
+                  class="d-input w-full"
+                  type="url"
+                  inputmode="url"
+                  placeholder="https://"
+                  aria-label="Adresa slike ${index + 1}"
+                  .value=${picture}
+                  @input=${(event: Event) => setRow(index, (event.target as HTMLInputElement).value, captions[index])}
+                />
+                <input
+                  class="d-input w-full"
+                  placeholder="Potpis"
+                  aria-label="Potpis slike ${index + 1}"
+                  .value=${captions[index]}
+                  @input=${(event: Event) => setRow(index, picture, (event.target as HTMLInputElement).value)}
+                />
+              </div>
+              <button
+                type="button"
+                class="d-btn d-btn-ghost d-btn-sm d-btn-square"
+                aria-label="Ukloni sliku ${index + 1}"
+                ?disabled=${pictures.length === 1}
+                @click=${() =>
+                  creator.setPictures(
+                    pictures.filter((_row, position) => position !== index),
+                    captions.filter((_row, position) => position !== index),
+                  )}
+              >
+                ${closeIcon}
+              </button>
+            </li>
+          `;
+        })}
+      </ol>
+      <div class="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          class="d-btn d-btn-ghost d-btn-sm"
+          ?disabled=${pictures.length >= MAX_PICTURES}
+          @click=${() => creator.setPictures([...pictures, ''], [...captions, ''])}
+        >
+          ${plusIcon} Dodaj sliku
+        </button>
+        <label class="d-btn d-btn-outline d-btn-sm ${room <= 0 || uploading ? 'd-btn-disabled' : ''}">
+          Sa uređaja
+          <input
+            class="hidden"
+            type="file"
+            accept="image/*"
+            multiple
+            ?disabled=${room <= 0 || uploading}
+            @change=${picked}
+          />
+        </label>
+        ${uploading ? html`<span id="pictures-uploading" class="fc-hint">Šaljem slike...</span>` : nothing}
+      </div>
+      <span class="fc-hint">
+        Slike sa uređaja idu u podgrupu Fajlovi, a njihove adrese se otvaraju bez prijave. Prva postaje i slika objave.
+      </span>
+    </div>
+  `;
+};
+
 const fieldView = (creator: Creator, form: Form, field: Field) => {
   const input = (event: Event) =>
     creator.setField(field.key, (event.target as HTMLInputElement | HTMLTextAreaElement).value);
@@ -344,6 +524,10 @@ const fieldView = (creator: Creator, form: Form, field: Field) => {
       return imageField(creator, form, field);
     case 'items':
       return itemsField(creator, form, field);
+    case 'choice':
+      return choiceField(creator, form, field);
+    case 'pictures':
+      return picturesField(creator, form, field);
     case 'textarea':
       return fieldShell(
         field,
@@ -446,7 +630,8 @@ const previewView = (state: CreatorState, form: Form) => {
 const actionsView = (creator: Creator, state: CreatorState, ui: Ui, draw: () => void) => {
   const form = state.form!;
   const missing = missingOf(form);
-  const blocked = missing.length > 0 || state.saving;
+  // Saving waits for the pictures still on their way, whose addresses it needs.
+  const blocked = missing.length > 0 || state.saving || state.uploading > 0;
   const hint = missing.length > 0 ? html`<p class="fc-hint w-full">Još treba: ${missing.join(', ')}.</p>` : nothing;
 
   if (isDraft(form)) {

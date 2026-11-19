@@ -33,7 +33,10 @@ Admin u aplikaciji vidi šta u ovim podešavanjima ne valja. Aplikacija ne zavis
 | Link | adresa, naslov, opis, slika |
 | Obaveštenje | važnost, naslov, tekst |
 | Pitanje | pitanje, dodatak |
+| Galerija | naslov, opis, izgled (slajdovi, kartice, bioskop, polaroid), do 20 slika sa potpisima |
 | Slobodan tekst | naslov, markdown |
+
+Galeriju crta Potok: opis kaže samo koje slike i koji izgled (`data-potok-gallery`), a Potokov CSS i dugmad je pretvaraju u traku koja se lista prevlačenjem. Slike sa uređaja za galeriju idu pozivom `uploadImage` u podgrupu Fajlovi ispod `.feed`, koju Feed ne prikazuje kao vest; prva postaje i slika objave.
 
 U tekstu rade `**jako**`, `*malo*`, `[link](adresa)` i obične adrese, a prazan red počinje novi pasus. Na površinama u boji nema linkova, jer im boja dolazi iz teme stranice.
 
@@ -91,7 +94,7 @@ Ako se u potok-u promeni `RichContentScrubber`, treba ažurirati i `src/sanitize
 
 ## Provereno
 
-Na pravom potok-u, u Chrome-u, sa svih devet formata, svetlom i tamnom temom i širinom telefona. Na stvarnim iOS i Android uređajima nije provereno, a najviše treba pogledati izbor slike i tastaturu preko forme.
+Na pravom potok-u, u Chrome-u, sa devet formata (bez galerije, dodate posle), svetlom i tamnom temom i širinom telefona. Na stvarnim iOS i Android uređajima nije provereno, a najviše treba pogledati izbor slike i tastaturu preko forme.
 
 ## Licenca
 

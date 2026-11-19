@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { LEVEL_OPTIONS, MAX_ITEMS, missingFields, TEMPLATES, templateOf, WAITING_IMAGE } from './templates';
+import {
+  fieldKeys,
+  LEVEL_OPTIONS,
+  LOOKS,
+  MAX_ITEMS,
+  MAX_PICTURES,
+  missingFields,
+  TEMPLATES,
+  templateOf,
+  WAITING_IMAGE,
+} from './templates';
 
 describe('the formats', () => {
   it('are between five and ten, each with its own id', () => {
@@ -143,6 +153,47 @@ describe('question', () => {
   });
 });
 
+describe('gallery', () => {
+  it('pairs each picture with its caption, also when a bad one drops out', () => {
+    const html = templateOf('gallery').render({
+      title: 'Dan',
+      pictures: ['javascript:alert(1)', ' https://a.rs/1.jpg ', ''],
+      captions: ['loša', 'Prva', 'treća'],
+    });
+
+    expect(html).toContain('<figure><img src="https://a.rs/1.jpg" alt="Prva"><figcaption>Prva</figcaption></figure>');
+    expect(html).not.toContain('loša');
+    expect(html).not.toContain('treća');
+  });
+
+  it('says its look, the first one for one it does not know', () => {
+    for (const { value } of LOOKS) {
+      const html = templateOf('gallery').render({ title: 'N', look: value, pictures: [WAITING_IMAGE] });
+      expect(html).toContain(`data-potok-gallery="${value}"`);
+    }
+
+    expect(templateOf('gallery').render({ title: 'N', look: 'x', pictures: [WAITING_IMAGE] })).toContain(
+      `data-potok-gallery="${LOOKS[0].value}"`,
+    );
+  });
+
+  it('names a picture without a caption by the title, and has no gallery without pictures', () => {
+    expect(templateOf('gallery').render({ title: 'Dan', pictures: [WAITING_IMAGE] })).toContain('alt="Dan"');
+    expect(templateOf('gallery').render({ title: 'Dan', pictures: [' '] })).not.toContain('data-potok-gallery');
+  });
+
+  it('stops at the limit', () => {
+    const pictures = Array.from({ length: MAX_PICTURES + 2 }, (_, index) => `https://a.rs/${index}.jpg`);
+    const html = templateOf('gallery').render({ title: 'N', pictures });
+
+    expect(html.match(/<figure>/g)).toHaveLength(MAX_PICTURES);
+  });
+
+  it('keeps its captions with its fields', () => {
+    expect(fieldKeys(templateOf('gallery'))).toEqual(['title', 'about', 'look', 'pictures', 'captions']);
+  });
+});
+
 describe('missingFields', () => {
   it('names what is required and empty', () => {
     expect(missingFields(templateOf('photo'), { title: ' ' })).toEqual(['Slika', 'Naslov']);
@@ -151,5 +202,10 @@ describe('missingFields', () => {
   it('wants one real item in a list', () => {
     expect(missingFields(templateOf('list'), { title: 'N', items: [' '] })).toEqual(['Stavke']);
     expect(missingFields(templateOf('list'), { title: 'N', items: ['a'] })).toEqual([]);
+  });
+
+  it('wants one picture in a gallery', () => {
+    expect(missingFields(templateOf('gallery'), { title: 'N', pictures: [''] })).toEqual(['Slike']);
+    expect(missingFields(templateOf('gallery'), { title: 'N', pictures: [WAITING_IMAGE] })).toEqual([]);
   });
 });

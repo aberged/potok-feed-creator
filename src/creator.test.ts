@@ -14,6 +14,14 @@ import { encodePost } from './post';
 import type { PotokChild, PotokOwnGroup, PotokSdk, PotokSubgroup } from './potok';
 import { WAITING_IMAGE } from './templates';
 
+/** What `shrinkImage` makes of any file here, as tests have no canvas. */
+const SHRUNK = 'data:image/jpeg;base64,AAAA';
+
+vi.mock('./image', async (original) => ({
+  ...(await original<typeof import('./image')>()),
+  shrinkImage: vi.fn(async () => SHRUNK),
+}));
+
 const own: PotokOwnGroup = {
   id: 2,
   name: '.feed',
@@ -105,6 +113,13 @@ function fakeApi(posts: PotokSubgroup[] = []) {
       html: `<p>${description.length}</p>`,
     })),
     openGroup: vi.fn<PotokSdk['openGroup']>(async () => ({ ok: true })),
+    getConfig: vi.fn<PotokSdk['getConfig']>(async () => ({ ok: true, config: null, files: null }) as never),
+    saveConfig: vi.fn<PotokSdk['saveConfig']>(async () => ({ ok: true, config: {} }) as never),
+    ensureFileGroups: vi.fn<PotokSdk['ensureFileGroups']>(async () => ({ ok: true, files: { public: 801 } })),
+    uploadImage: vi.fn<PotokSdk['uploadImage']>(async () => ({
+      ok: true,
+      file: { file: nextId, name: 'slika.jpg', size: 3, type: 'image/jpeg', url: `https://potok.test/pictures/${nextId++}` },
+    })),
   };
 }
 
@@ -841,5 +856,69 @@ describe('leaving', () => {
 
     expect(api.openGroup).toHaveBeenCalledWith(7, { tab: 'settings' });
     expect(creator.state.error).toBeTruthy();
+  });
+});
+
+describe('a gallery', () => {
+  const files = (count: number) =>
+    Array.from({ length: count }, (_, index) => new File(['x'], `slika-${index}.png`, { type: 'image/png' }));
+
+  async function gallery(api = fakeApi()) {
+    const context = await started(api);
+    context.creator.pickTemplate('gallery');
+    context.creator.setField('title', 'Dan na potoku');
+    return context;
+  }
+
+  it("sends pictures from the device into its rows, the first one also as the post's picture", async () => {
+    const { api, creator } = await gallery();
+
+    await creator.addDevicePictures(files(2));
+
+    expect(api.saveConfig).toHaveBeenCalledWith({ rules: {} }, { revision: 0 });
+    expect(api.ensureFileGroups).toHaveBeenCalledTimes(1);
+    expect(api.uploadImage).toHaveBeenCalledTimes(2);
+    expect(creator.state.form!.fields.pictures).toEqual(['https://potok.test/pictures/500', 'https://potok.test/pictures/501']);
+    expect(creator.state.form!.fields.captions).toEqual(['', '']);
+    expect(creator.state.form!.pendingImage).toBe(SHRUNK);
+    expect(creator.state.uploading).toBe(0);
+  });
+
+  it('fills empty rows first and asks for the file group once', async () => {
+    const { api, creator } = await gallery();
+    creator.setPictures(['https://a.rs/1.jpg', ''], ['Prva', 'Druga']);
+
+    await creator.addDevicePictures(files(1));
+    await creator.addDevicePictures(files(1));
+
+    expect(creator.state.form!.fields.pictures).toEqual(['https://a.rs/1.jpg', 'https://potok.test/pictures/500', 'https://potok.test/pictures/501']);
+    expect(creator.state.form!.fields.captions).toEqual(['Prva', 'Druga', '']);
+    expect(creator.state.form!.pendingImage).toBeNull();
+    expect(api.getConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps its own addresses when it saves, and gives the post its first picture', async () => {
+    const { api, creator } = await gallery();
+    await creator.addDevicePictures(files(1));
+
+    await creator.savePost();
+
+    expect(api.createChild).toHaveBeenNthCalledWith(1, { name: 'Dan na potoku', picture: SHRUNK });
+    const [, attrs] = api.updateChild.mock.calls.at(-1)!;
+    expect(attrs.description).toContain('data-potok-gallery="slides"');
+    expect(attrs.description).toContain('https://potok.test/pictures/500');
+    expect(attrs.description).not.toContain('"image"');
+  });
+
+  it('says so when the pictures cannot go anywhere', async () => {
+    const api = fakeApi();
+    api.ensureFileGroups.mockResolvedValue({ ok: false, error: 'forbidden' });
+    const { creator } = await gallery(api);
+
+    await creator.addDevicePictures(files(1));
+
+    expect(creator.state.error).toBe('Slike trenutno ne mogu da se pošalju.');
+    expect(creator.state.form!.fields.pictures).toBeUndefined();
+    expect(creator.state.uploading).toBe(0);
   });
 });

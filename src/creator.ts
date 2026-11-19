@@ -1,7 +1,18 @@
 import { defaultAudience, DRAFT, stateOf, type Audience } from './audience';
+import { fileOfDataUrl, shrinkImage } from './image';
 import { decodePost, encodePost, type Post } from './post';
 import type { PotokChild, PotokChildAttrs, PotokContentFormat, PotokError, PotokGroupTab, PotokOwnGroup, PotokSdk, PotokSubgroup } from './potok';
-import { isTemplateId, missingFields, templateOf, WAITING_IMAGE, type PostFields, type TemplateId } from './templates';
+import {
+  fieldKeys,
+  hasImageField,
+  isTemplateId,
+  MAX_PICTURES,
+  missingFields,
+  templateOf,
+  WAITING_IMAGE,
+  type PostFields,
+  type TemplateId,
+} from './templates';
 
 export const PAGE_SIZE = 20;
 
@@ -13,6 +24,8 @@ export const PREVIEW_DELAY_MS = 600;
 export const NOTICE_MS = 4_000;
 
 const FAILED_SAVE = 'Objava nije sačuvana. Pokušaj ponovo.';
+const FAILED_PICTURE = 'Slika nije poslata. Pokušaj ponovo.';
+const UNREADABLE_PICTURE = 'Ta slika ne može da se pročita. Izaberi drugu.';
 const SLOW_SAVE = 'Veza je spora, pa ne znamo da li je sve sačuvano. Pogledaj pregled i sačuvaj još jednom.';
 
 export type Screen = 'list' | 'templates' | 'editor';
@@ -56,6 +69,8 @@ export type CreatorState = {
   /** The form as the server will show it; null until it answers. */
   previewHtml: string | null;
   saving: boolean;
+  /** Pictures from the device on their way to the "Files" group. */
+  uploading: number;
   notice: string | null;
   error: string | null;
 };
@@ -71,6 +86,10 @@ type CreatorApi = Pick<
   | 'withdrawChild'
   | 'previewDescription'
   | 'openGroup'
+  | 'getConfig'
+  | 'saveConfig'
+  | 'ensureFileGroups'
+  | 'uploadImage'
 >;
 
 type CreatorStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -84,10 +103,21 @@ export const audienceOf = (group: Pick<PotokSubgroup, 'is_public' | 'inherits_me
 
 export const isDraft = (form: Pick<Form, 'audience'>) => stateOf(form.audience) === 'draft';
 
+/** The fields with a picture from the device standing in the template's picture until it has an address. */
+const withPendingImage = (form: Form): PostFields =>
+  form.pendingImage && hasImageField(templateOf(form.template)) ? { ...form.fields, image: WAITING_IMAGE } : form.fields;
+
 /** The required fields still empty, by their labels. */
 export function missingOf(form: Form): string[] {
-  const fields = form.pendingImage ? { ...form.fields, image: WAITING_IMAGE } : form.fields;
-  return missingFields(templateOf(form.template), fields);
+  return missingFields(templateOf(form.template), withPendingImage(form));
+}
+
+/** The pictures of a gallery and their captions, as many of one as of the other. */
+export function pictureRows(fields: PostFields): { pictures: string[]; captions: string[] } {
+  const pictures = Array.isArray(fields.pictures) ? [...fields.pictures] : [];
+  const stored = Array.isArray(fields.captions) ? fields.captions : [];
+
+  return { pictures, captions: pictures.map((_picture, index) => stored[index] ?? '') };
 }
 
 /**
@@ -133,6 +163,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
     form: null,
     previewHtml: null,
     saving: false,
+    uploading: 0,
     notice: null,
     error: null,
   };
@@ -225,10 +256,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
   const postOf = ({ template, fields }: Form): Post => ({ template, fields });
 
   /** The picture from the device has no address yet, so the text stands in one. */
-  const previewOf = (form: Form) => {
-    const fields = form.pendingImage ? { ...form.fields, image: WAITING_IMAGE } : form.fields;
-    return encodePost({ template: form.template, fields }, form.format);
-  };
+  const previewOf = (form: Form) => encodePost({ template: form.template, fields: withPendingImage(form) }, form.format);
 
   const refreshPreview = async () => {
     const { form } = state;
@@ -328,12 +356,15 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
 
       if (!reply.ok) return reply;
 
+      // A gallery keeps its own addresses: its first picture is the post's too.
       current = {
         ...current,
         id: reply.group.id,
         pendingImage: null,
         clearPicture: false,
-        fields: { ...current.fields, image: groupImageAddress(reply.group.picture_url, Date.now()) },
+        fields: hasImageField(templateOf(current.template))
+          ? { ...current.fields, image: groupImageAddress(reply.group.picture_url, Date.now()) }
+          : current.fields,
       };
 
       update({ form: current });
@@ -363,7 +394,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
 
   const save = async (audience?: Audience): Promise<PotokChild | null> => {
     const { form } = state;
-    if (!form || state.saving) return null;
+    if (!form || state.saving || state.uploading > 0) return null;
 
     update({ saving: true, error: null, notice: null });
 
@@ -403,6 +434,58 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
     return child;
   };
 
+  // --- The pictures of a gallery
+
+  let uploadsReady: Promise<boolean> | null = null;
+
+  /**
+   * FeedCreator keeps pictures from the device in its "Files" group, which
+   * Potok makes for an app with a config: an empty one is enough. Asked once,
+   * and again after a failure.
+   */
+  const readyForUploads = (): Promise<boolean> => {
+    uploadsReady ??= (async () => {
+      const reply = await api.getConfig().catch(() => null);
+      if (!reply?.ok) return false;
+      if (reply.files?.public === 'ok') return true;
+
+      if (!reply.config) {
+        const saved = await api.saveConfig({ rules: {} }, { revision: 0 }).catch(() => null);
+        if (!saved?.ok) return false;
+      }
+
+      const files = await api.ensureFileGroups().catch(() => null);
+      return Boolean(files?.ok);
+    })().then((ready) => {
+      if (!ready) uploadsReady = null;
+      return ready;
+    });
+
+    return uploadsReady;
+  };
+
+  /**
+   * A sent picture takes the first empty row, or a new one. The first row's
+   * picture also goes to the post's own, for its card and the lists.
+   */
+  const placePicture = (address: string, picture: string) => {
+    const form = state.form;
+    if (!form) return;
+
+    const { pictures, captions } = pictureRows(form.fields);
+    let index = pictures.findIndex((row) => row.trim() === '');
+
+    if (index === -1) {
+      if (pictures.length >= MAX_PICTURES) return;
+      index = pictures.length;
+      pictures.push('');
+      captions.push('');
+    }
+
+    pictures[index] = address;
+    changed({ fields: { ...form.fields, pictures, captions }, ...(index === 0 ? { pendingImage: picture } : {}) });
+  };
+
   const backToList = () => {
     clearTimeout(previewTimer);
     previewRun += 1;
@@ -437,8 +520,8 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
       if (!form) return openForm(newForm(template));
 
       const fields = Object.fromEntries(
-        templateOf(template)
-          .fields.map(({ key }) => [key, form.fields[key]])
+        fieldKeys(templateOf(template))
+          .map((key) => [key, form.fields[key]])
           .filter(([, value]) => value !== undefined),
       );
 
@@ -491,6 +574,41 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
       changed({ pendingImage });
     },
 
+    /** The rows of a gallery, as the form holds them. */
+    setPictures(pictures: string[], captions: string[]) {
+      if (state.form) changed({ fields: { ...state.form.fields, pictures, captions } });
+    },
+
+    /**
+     * Pictures from the device for a gallery: each goes up at once, made
+     * small, and its address goes into the form. Saving waits for them.
+     */
+    async addDevicePictures(files: File[]) {
+      if (!state.form || files.length === 0) return;
+
+      update({ uploading: state.uploading + files.length, error: null });
+
+      try {
+        if (!(await readyForUploads())) return fail('Slike trenutno ne mogu da se pošalju.');
+
+        for (const file of files) {
+          const picture = await shrinkImage(file);
+          if (!picture) {
+            fail(UNREADABLE_PICTURE);
+            continue;
+          }
+
+          const name = `${file.name.replace(/\.[^.]*$/, '') || 'slika'}.jpg`;
+          const reply = await api.uploadImage(fileOfDataUrl(picture, name)).catch(() => null);
+
+          if (reply?.ok && reply.file.url) placePicture(reply.file.url, picture);
+          else fail(reply && !reply.ok ? failureOf(reply) : FAILED_PICTURE);
+        }
+      } finally {
+        update({ uploading: Math.max(0, state.uploading - files.length) });
+      }
+    },
+
     /** A picture the group holds goes with it, as its address opens without a session. */
     removeImage() {
       const { form } = state;
@@ -507,7 +625,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
     },
 
     imageFailed() {
-      fail('Ta slika ne može da se pročita. Izaberi drugu.');
+      fail(UNREADABLE_PICTURE);
     },
 
     /** A post changed by hand returns to what its template makes of its fields. */

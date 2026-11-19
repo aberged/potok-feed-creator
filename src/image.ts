@@ -21,6 +21,15 @@ async function loadBitmap(file: File): Promise<ImageBitmap | HTMLImageElement> {
   return image;
 }
 
+/** A `data:` address as a file, for a call that sends files. */
+export function fileOfDataUrl(address: string, name: string): File {
+  const comma = address.indexOf(',');
+  const type = address.slice(5, comma).split(';')[0] || 'image/jpeg';
+  const bytes = Uint8Array.from(atob(address.slice(comma + 1)), (char) => char.charCodeAt(0));
+
+  return new File([bytes], name, { type });
+}
+
 /** A JPEG `data:` address for the file, or null when it is no picture this browser can read. */
 export async function shrinkImage(file: File): Promise<string | null> {
   try {

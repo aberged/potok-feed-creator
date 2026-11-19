@@ -19,9 +19,20 @@ export type TemplateId =
   | 'link'
   | 'notice'
   | 'question'
+  | 'gallery'
   | 'text';
 
-export type FieldKind = 'text' | 'textarea' | 'url' | 'image' | 'date' | 'time' | 'level' | 'items';
+export type FieldKind =
+  | 'text'
+  | 'textarea'
+  | 'url'
+  | 'image'
+  | 'date'
+  | 'time'
+  | 'level'
+  | 'items'
+  | 'choice'
+  | 'pictures';
 
 export type Field = {
   key: string;
@@ -30,6 +41,10 @@ export type Field = {
   placeholder?: string;
   hint?: string;
   required?: boolean;
+  /** The choices of a `choice`, the first one the default. */
+  options?: { value: string; label: string }[];
+  /** The key of the captions that go with a field of `pictures`, one for each. */
+  captions?: string;
 };
 
 export type PostFields = Record<string, string | string[]>;
@@ -50,6 +65,21 @@ export type Template = {
 };
 
 export const MAX_ITEMS = 10;
+
+/** How many pictures a gallery holds. */
+export const MAX_PICTURES = 20;
+
+/**
+ * The looks of a gallery. Potok draws them (`PotokIdeWeb.Galleries` and its
+ * CSS): the HTML only says which, in the one attribute of its kind the
+ * sanitizer keeps.
+ */
+export const LOOKS = [
+  { value: 'slides', label: 'Slajdovi' },
+  { value: 'cards', label: 'Kartice' },
+  { value: 'cinema', label: 'Bioskop' },
+  { value: 'polaroid', label: 'Polaroid' },
+];
 
 /** Stands for a picture from the device until the group has an address for it. */
 export const WAITING_IMAGE = 'https://potok.invalid/picture-on-its-way';
@@ -230,6 +260,45 @@ function notice(fields: PostFields): string {
   ].join('');
 }
 
+/**
+ * The pictures of a gallery with their captions, paired first, so that a
+ * picture dropped for a bad address takes its own caption along.
+ */
+export function galleryPictures(fields: PostFields): { address: string; caption: string }[] {
+  const addresses = Array.isArray(fields.pictures) ? fields.pictures : [];
+  const captions = Array.isArray(fields.captions) ? fields.captions : [];
+
+  return addresses
+    .map((address, index) => ({
+      address: safeImage(typeof address === 'string' ? address.trim() : ''),
+      caption: typeof captions[index] === 'string' ? captions[index].trim() : '',
+    }))
+    .filter(({ address }) => address !== '')
+    .slice(0, MAX_PICTURES);
+}
+
+const lookOf = (fields: PostFields) => {
+  const look = text(fields, 'look');
+  return LOOKS.some(({ value }) => value === look) ? look : LOOKS[0].value;
+};
+
+function gallery(fields: PostFields): string {
+  const title = text(fields, 'title');
+
+  const slides = galleryPictures(fields)
+    .map(({ address, caption }) => {
+      const note = caption ? `<figcaption>${inline(caption)}</figcaption>` : '';
+      return `<figure><img src="${escapeHtml(address)}" alt="${escapeHtml(caption || title)}">${note}</figure>`;
+    })
+    .join('');
+
+  return [
+    `<h2 style="${HEADING} font-size: 26px; line-height: 1.2; margin: 0;">${escapeHtml(title)}</h2>`,
+    paragraphs(text(fields, 'about'), 'margin: 8px 0 0;'),
+    slides && `<div data-potok-gallery="${lookOf(fields)}" style="margin: 14px 0 0;"><div>${slides}</div></div>`,
+  ].join('');
+}
+
 function question(fields: PostFields): string {
   return [
     '<div style="background-color: #134e4a; color: #ffffff; border-radius: 20px; padding: 32px 24px; text-align: center;">',
@@ -367,6 +436,26 @@ export const TEMPLATES: Template[] = [
     card: (fields) => text(fields, 'about'),
   },
   {
+    id: 'gallery',
+    name: 'Galerija',
+    purpose: 'Slike koje se listaju prevlačenjem, u jednom od četiri izgleda.',
+    fields: [
+      { key: 'title', label: 'Naslov', kind: 'text', required: true },
+      { key: 'about', label: 'Opis', kind: 'textarea' },
+      { key: 'look', label: 'Izgled', kind: 'choice', options: LOOKS },
+      { key: 'pictures', label: 'Slike', kind: 'pictures', required: true, captions: 'captions' },
+    ],
+    sample: {
+      title: 'Dan na potoku',
+      look: 'cards',
+      pictures: [WAITING_IMAGE, WAITING_IMAGE, WAITING_IMAGE],
+      captions: ['Jutro', '', 'Veče'],
+    },
+    title: (fields) => clip(text(fields, 'title')),
+    render: gallery,
+    card: (fields) => text(fields, 'about'),
+  },
+  {
     id: 'text',
     name: 'Slobodan tekst',
     purpose: 'Sve ostalo, u markdownu.',
@@ -383,6 +472,13 @@ export const TEMPLATES: Template[] = [
 
 export const templateOf = (id: TemplateId): Template =>
   TEMPLATES.find((template) => template.id === id) ?? TEMPLATES[0];
+
+/** The keys a template's form keeps: its fields', and the captions of a field of pictures. */
+export const fieldKeys = (template: Template): string[] =>
+  template.fields.flatMap(({ key, captions }) => (captions ? [key, captions] : [key]));
+
+/** Whether the template has a field of its own picture, which a picture from the device fills. */
+export const hasImageField = (template: Template): boolean => template.fields.some(({ kind }) => kind === 'image');
 
 export function isTemplateId(value: unknown): value is TemplateId {
   return TEMPLATES.some((template) => template.id === value);
