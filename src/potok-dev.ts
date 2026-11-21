@@ -1300,7 +1300,7 @@ function createServer(el: HTMLElement) {
 
     openGroup(id: number, tab: PotokGroupTab | undefined): { ok: true } | PotokError {
       const known =
-        id === ownGroup.id ||
+        (id === ownGroup.id && (tab === 'settings' || tab === 'templates')) ||
         id === ownGroup.parent?.id ||
         children.some((group) => group.id === id) ||
         Object.values(loadSubgroups()).some((groups) => groups.some((group) => group.id === id));
