@@ -1,4 +1,5 @@
 import { clip, escapeHtml, hostOf, inline, paragraphs, safeHref, safeImage } from './html';
+import type { PotokTemplate } from './potok';
 
 // The formats of a post. Each turns its fields into the HTML of a group
 // description, and that HTML has to stand on its own: the sanitizer keeps no
@@ -10,7 +11,7 @@ import { clip, escapeHtml, hostOf, inline, paragraphs, safeHref, safeImage } fro
 // here, so a colored surface always sets its background and its text together,
 // and takes no links, whose color comes from the theme.
 
-export type TemplateId =
+export type BuiltInTemplateId =
   | 'article'
   | 'photo'
   | 'quote'
@@ -22,6 +23,15 @@ export type TemplateId =
   | 'gallery'
   | 'text';
 
+/**
+ * A template of the group's own, or of a group above it, made in Potok's
+ * settings (Šabloni). Potok renders it (`renderTemplate`): this app only
+ * fills its form.
+ */
+export type CustomTemplateId = `custom:${number}`;
+
+export type TemplateId = BuiltInTemplateId | CustomTemplateId;
+
 export type FieldKind =
   | 'text'
   | 'textarea'
@@ -32,7 +42,8 @@ export type FieldKind =
   | 'level'
   | 'items'
   | 'choice'
-  | 'pictures';
+  | 'pictures'
+  | 'video';
 
 export type Field = {
   key: string;
@@ -45,6 +56,8 @@ export type Field = {
   options?: { value: string; label: string }[];
   /** The key of the captions that go with a field of `pictures`, one for each. */
   captions?: string;
+  /** How many rows a list holds, when not `MAX_ITEMS`. */
+  max?: number;
 };
 
 export type PostFields = Record<string, string | string[]>;
@@ -62,6 +75,15 @@ export type Template = {
   render: (fields: PostFields) => string;
   /** What the card of a shared link says under the name. Nothing leaves it to Potok. */
   card: (fields: PostFields) => string;
+  /** A group's own template, which Potok renders: `render` and `card` are not used. */
+  custom?: {
+    rev: number;
+    own: boolean;
+    /** The group it comes from, when the viewer sees it; null for this group's own. */
+    owner: string | null;
+    /** Its HTML with sample values, sanitized by Potok. */
+    thumbnail: string;
+  };
 };
 
 export const MAX_ITEMS = 10;
@@ -470,18 +492,94 @@ export const TEMPLATES: Template[] = [
   },
 ];
 
+/** How many rows a list of a group's own template holds (`PostTemplates.Custom`). */
+export const CUSTOM_MAX_ITEMS = 30;
+
+const CUSTOM_ID = /^custom:\d+$/;
+
+/** The templates of the group's own and of the groups above it, as `listTemplates` last gave them. */
+let customTemplates: Template[] = [];
+
+export const isCustomTemplateId = (value: unknown): value is CustomTemplateId =>
+  typeof value === 'string' && CUSTOM_ID.test(value);
+
+/** The name of a group's own post, as Potok gives it: its first required short text. */
+function customTitle(fields: PostFields, keys: string[]): string {
+  const key = keys[0];
+  return key ? text(fields, key).slice(0, 120) : '';
+}
+
+/** A template from `listTemplates`, in the shape the form takes. */
+export function customTemplateOf(template: PotokTemplate): Template {
+  const named = template.fields.filter(({ kind, required }) => kind === 'text' && required).map(({ key }) => key);
+
+  return {
+    id: template.id,
+    name: template.name,
+    purpose: template.purpose,
+    fields: template.fields.map((field) => ({
+      key: field.key,
+      label: field.label,
+      kind: field.kind,
+      required: field.required,
+      ...(field.hint ? { hint: field.hint } : {}),
+      ...(field.kind === 'choice' ? { options: field.options.map((option) => ({ value: option, label: option })) } : {}),
+      ...(field.captions ? { captions: field.captions } : {}),
+      ...(field.kind === 'items' ? { max: CUSTOM_MAX_ITEMS } : {}),
+    })),
+    sample: {},
+    title: (fields) => customTitle(fields, named),
+    render: () => '',
+    card: () => '',
+    custom: { rev: template.rev, own: template.own, owner: template.owner, thumbnail: template.thumbnail },
+  };
+}
+
+/** Takes what `listTemplates` answered, for `templateOf` and the list of formats. */
+export function setCustomTemplates(templates: PotokTemplate[]): Template[] {
+  customTemplates = templates.filter(({ id }) => isCustomTemplateId(id)).map(customTemplateOf);
+  return customTemplates;
+}
+
+/** Whether `id` is a template this group can write with: built in, or one `listTemplates` gave. */
+export const knownTemplate = (id: TemplateId): boolean =>
+  TEMPLATES.some((template) => template.id === id) || customTemplates.some((template) => template.id === id);
+
+/**
+ * A group's own template that is gone, or not this group's: it has no form,
+ * and a post made with it opens as free text.
+ */
+const goneTemplate = (id: CustomTemplateId): Template => ({
+  id,
+  name: 'Šablon koga više nema',
+  purpose: '',
+  fields: [],
+  sample: {},
+  title: () => '',
+  render: () => '',
+  card: () => '',
+  custom: { rev: 0, own: false, owner: null, thumbnail: '' },
+});
+
 export const templateOf = (id: TemplateId): Template =>
-  TEMPLATES.find((template) => template.id === id) ?? TEMPLATES[0];
+  TEMPLATES.find((template) => template.id === id) ??
+  customTemplates.find((template) => template.id === id) ??
+  (isCustomTemplateId(id) ? goneTemplate(id) : TEMPLATES[0]);
 
 /** The keys a template's form keeps: its fields', and the captions of a field of pictures. */
 export const fieldKeys = (template: Template): string[] =>
   template.fields.flatMap(({ key, captions }) => (captions ? [key, captions] : [key]));
 
-/** Whether the template has a field of its own picture, which a picture from the device fills. */
-export const hasImageField = (template: Template): boolean => template.fields.some(({ kind }) => kind === 'image');
+/**
+ * Whether the template has a field of the post's own picture (`image`), which
+ * a picture from the device fills by becoming the group's picture. A group's
+ * own template takes addresses in every field of pictures.
+ */
+export const hasImageField = (template: Template): boolean =>
+  !template.custom && template.fields.some(({ kind }) => kind === 'image');
 
 export function isTemplateId(value: unknown): value is TemplateId {
-  return TEMPLATES.some((template) => template.id === value);
+  return TEMPLATES.some((template) => template.id === value) || isCustomTemplateId(value);
 }
 
 /** The required fields left empty, by their labels. */

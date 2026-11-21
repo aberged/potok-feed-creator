@@ -43,6 +43,9 @@ import type {
   PotokSubgroupListOptions,
   PotokSubgroupPage,
   PotokSummary,
+  PotokRenderedTemplate,
+  PotokTemplate,
+  PotokTemplateField,
   PotokUploadedFile,
   PotokValue,
   PotokValueChange,
@@ -1297,12 +1300,20 @@ function createServer(el: HTMLElement) {
 
     openGroup(id: number, tab: PotokGroupTab | undefined): { ok: true } | PotokError {
       const known =
+        id === ownGroup.id ||
         id === ownGroup.parent?.id ||
         children.some((group) => group.id === id) ||
         Object.values(loadSubgroups()).some((groups) => groups.some((group) => group.id === id));
       if (!known) return { ok: false, error: 'not_found' };
 
-      const path = tab === 'description' ? 'group_home' : tab === 'settings' ? 'edit_group' : 'values';
+      const path =
+        tab === 'description'
+          ? 'group_home'
+          : tab === 'settings'
+            ? 'edit_group'
+            : tab === 'templates'
+              ? 'edit_group?section=templates'
+              : 'values';
       console.info(`[potok-dev] openGroup: in potok the viewer goes to /groups/${id}/${path} and the app ends.`);
       return { ok: true };
     },
@@ -1493,6 +1504,51 @@ function createServer(el: HTMLElement) {
       if (!ownGroup.can_manage_children) return forbidden;
 
       return { ok: true, html: devDescriptionHtml(description, format ?? 'markdown') };
+    },
+
+    listTemplates(): { ok: true; templates: PotokTemplate[] } | PotokError {
+      if (!ownGroup.can_manage_children) return forbidden;
+
+      return {
+        ok: true,
+        templates: loadTemplates().map((template) => ({
+          ...template,
+          thumbnail: devTemplateHtml(template, devTemplateSample(template)),
+        })),
+      };
+    },
+
+    renderTemplate(id: string, fields: Record<string, string | string[]>): PotokRenderedTemplate | PotokError {
+      if (!ownGroup.can_manage_children) return forbidden;
+
+      const template = loadTemplates().find((row) => row.id === id);
+      if (!template) return { ok: false, error: 'not_found', message: 'This group has no such template.' };
+
+      const keys = new Set(template.fields.flatMap(({ key, captions }) => (captions ? [key, captions] : [key])));
+      const kept = Object.fromEntries(Object.entries(fields ?? {}).filter(([key]) => keys.has(key)));
+      const html = devTemplateHtml(template, kept);
+      const marker = JSON.stringify({ v: 1, template: id, rev: template.rev, fields: kept, hash: devHash(html) })
+        .replace(/</g, '\\u003c')
+        .replace(/>/g, '\\u003e')
+        .replace(/--/g, '-\\u002d');
+
+      const required = template.fields.find(({ kind, required }) => kind === 'text' && required);
+      const named = required && typeof kept[required.key] === 'string' ? (kept[required.key] as string).trim() : '';
+
+      return {
+        ok: true,
+        description: `<!--potok-post ${marker}-->\n${html}`,
+        name: named.slice(0, 120) || template.name,
+        html,
+        missing: template.fields
+          .filter(({ required: needed, key }) => {
+            if (!needed) return false;
+            const value = kept[key];
+            return Array.isArray(value) ? value.every((item) => item.trim() === '') : !value?.trim();
+          })
+          .map(({ label }) => label),
+        rev: template.rev,
+      };
     },
 
     listPolls(options: PotokPollListOptions): { ok: true; polls: PotokPoll[]; has_more: boolean } {
@@ -2172,6 +2228,10 @@ function createSdk(server: DevServer): PotokSdk {
       return server.sendFile(file, null, '_image', options.onProgress);
     },
 
+    uploadMedia(file, options = {}) {
+      return server.sendFile(file, null, '_image', options.onProgress);
+    },
+
     onValues(listener, options = {}) {
       if (typeof listener !== 'function') return () => {};
 
@@ -2258,6 +2318,14 @@ function createSdk(server: DevServer): PotokSdk {
 
     async previewDescription(description, options = {}) {
       return server.previewDescription(description, options.descriptionFormat ?? null);
+    },
+
+    async listTemplates() {
+      return server.listTemplates();
+    },
+
+    async renderTemplate(id, fields) {
+      return server.renderTemplate(typeof id === 'string' ? id : '', fields && typeof fields === 'object' ? fields : {});
     },
 
     async listPolls(options = {}) {
@@ -2391,6 +2459,123 @@ function createLegacy(sdk: PotokSdk, abortController: AbortController): PotokApi
       newValueListeners.set(legacyCallback, false);
     },
   };
+}
+
+// --- Templates of a group's own (`listTemplates`, `renderTemplate`)
+//
+// In `potok-dev:templates`, as `PotokTemplate[]` without `thumbnail`. Potok
+// renders a template's own HTML; the mock lays the fields out plainly, which
+// is enough to see a form and its preview work.
+
+const TEMPLATES_KEY = 'potok-dev:templates';
+
+const DEV_TEMPLATES: Omit<PotokTemplate, 'thumbnail'>[] = [
+  {
+    id: 'custom:1',
+    name: 'Utakmica',
+    purpose: 'Rezultat, strelci, slike i snimak.',
+    rev: 1,
+    own: false,
+    owner: 'Liga',
+    fields: [
+      { key: 'domacin', label: 'Domaćin', kind: 'text', required: true, hint: '', options: [] },
+      { key: 'ishod', label: 'Ishod', kind: 'choice', required: false, hint: '', options: ['pobeda', 'nerešeno', 'poraz'] },
+      { key: 'strelci', label: 'Strelci', kind: 'items', required: false, hint: '', options: [] },
+      { key: 'izvestaj', label: 'Izveštaj', kind: 'textarea', required: false, hint: '', options: [] },
+      { key: 'slika', label: 'Slika', kind: 'image', required: false, hint: '', options: [] },
+      {
+        key: 'galerija',
+        label: 'Galerija',
+        kind: 'pictures',
+        required: false,
+        hint: '',
+        options: [],
+        captions: 'galerija_captions',
+      },
+      { key: 'snimak', label: 'Snimak', kind: 'video', required: false, hint: '', options: [] },
+    ],
+  },
+];
+
+function loadTemplates(): Omit<PotokTemplate, 'thumbnail'>[] {
+  try {
+    const stored: unknown = JSON.parse(localStorage.getItem(TEMPLATES_KEY) ?? 'null');
+    return Array.isArray(stored) ? (stored as Omit<PotokTemplate, 'thumbnail'>[]) : DEV_TEMPLATES;
+  } catch {
+    return DEV_TEMPLATES;
+  }
+}
+
+const devEscape = (text: string) =>
+  text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+const devAddress = (text: string) => (/^https?:\/\//i.test(text.trim()) ? devEscape(text.trim()) : '');
+
+function devTemplateHtml(template: { fields: PotokTemplateField[] }, fields: Record<string, unknown>): string {
+  const text = (key: string) => (typeof fields[key] === 'string' ? (fields[key] as string).trim() : '');
+  const list = (key: string) => (Array.isArray(fields[key]) ? (fields[key] as unknown[]).map(String) : []);
+
+  return template.fields
+    .map((field, index) => {
+      const value = text(field.key);
+
+      switch (field.kind) {
+        case 'items': {
+          const rows = list(field.key).filter((row) => row.trim() !== '');
+          return rows.length ? `<ul>${rows.map((row) => `<li>${devEscape(row)}</li>`).join('')}</ul>` : '';
+        }
+        case 'pictures': {
+          const captions = list(field.captions ?? '');
+          return list(field.key)
+            .map((picture, row) => [devAddress(picture), captions[row] ?? ''] as const)
+            .filter(([address]) => address)
+            .map(([address, caption]) => `<figure><img src="${address}" alt=""><figcaption>${devEscape(caption)}</figcaption></figure>`)
+            .join('');
+        }
+        case 'image':
+          return devAddress(value) ? `<img src="${devAddress(value)}" alt="">` : '';
+        case 'video':
+          return devAddress(value) ? `<video src="${devAddress(value)}" controls preload="metadata"></video>` : '';
+        case 'url':
+          return devAddress(value) ? `<p><a href="${devAddress(value)}">${devEscape(field.label)}</a></p>` : '';
+        default:
+          if (!value) return '';
+          return index === 0 ? `<h2>${devEscape(value)}</h2>` : `<p>${devEscape(value)}</p>`;
+      }
+    })
+    .join('');
+}
+
+/** Words in every text field, as Potok's thumbnails have; no picture or video. */
+function devTemplateSample(template: { fields: PotokTemplateField[] }): Record<string, string | string[]> {
+  return Object.fromEntries(
+    template.fields.flatMap((field): [string, string | string[]][] => {
+      switch (field.kind) {
+        case 'items':
+          return [[field.key, [`${field.label} 1`, `${field.label} 2`]]];
+        case 'pictures':
+        case 'image':
+        case 'video':
+          return [];
+        case 'choice':
+          return [[field.key, field.options[0] ?? '']];
+        default:
+          return [[field.key, field.label]];
+      }
+    }),
+  );
+}
+
+/** FNV-1a, as `post.ts` and Potok hash a description below its marker. */
+function devHash(html: string): string {
+  let hash = 0x811c9dc5;
+
+  for (const unit of html.replace(/\r/g, '').trim()) {
+    hash ^= unit.codePointAt(0)!;
+    hash = Math.imul(hash, 0x01000193);
+  }
+
+  return (hash >>> 0).toString(16).padStart(8, '0');
 }
 
 export function installDevPotok(): PotokApi {

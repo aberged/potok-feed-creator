@@ -1,6 +1,6 @@
 import { escapeHtml, summary } from './html';
 import type { PotokContentFormat } from './potok';
-import { isTemplateId, templateOf, type PostFields, type TemplateId } from './templates';
+import { isCustomTemplateId, isTemplateId, templateOf, type PostFields, type TemplateId } from './templates';
 
 // A post's source and the description of its group. The description is what a
 // feed shows, so it has to be HTML that stands alone. What it was made from
@@ -57,7 +57,10 @@ function cardTag(text: string): string {
   return content ? `<meta name="description" content="${escapeHtml(content)}">` : '';
 }
 
+/** For a built-in template; Potok writes the description of a group's own (`renderTemplate`). */
 export function encodePost({ template, fields }: Post, format: PotokContentFormat = 'markdown'): Description {
+  if (isCustomTemplateId(template)) throw new Error(`Potok renders ${template}: use renderTemplate`);
+
   const { title, render, card } = templateOf(template);
   const name = title(fields);
 

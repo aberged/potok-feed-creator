@@ -10,9 +10,35 @@ import {
   UNSAVED_KEY,
   type CreatorState,
 } from './creator';
-import { encodePost } from './post';
-import type { PotokChild, PotokOwnGroup, PotokSdk, PotokSubgroup } from './potok';
+import { encodePost, hashOf } from './post';
+import type { PotokChild, PotokOwnGroup, PotokSdk, PotokSubgroup, PotokTemplate } from './potok';
 import { WAITING_IMAGE } from './templates';
+
+/** A template of a group above `.feed`, as `listTemplates` gives it. */
+const MATCH: PotokTemplate = {
+  id: 'custom:7',
+  name: 'Utakmica',
+  purpose: 'Rezultat i strelci.',
+  rev: 2,
+  own: false,
+  owner: 'Liga',
+  thumbnail: '<h2>Domaćin</h2>',
+  fields: [
+    { key: 'domacin', label: 'Domaćin', kind: 'text', required: true, hint: '', options: [] },
+    { key: 'ishod', label: 'Ishod', kind: 'choice', required: false, hint: '', options: ['pobeda', 'poraz'] },
+    { key: 'strelci', label: 'Strelci', kind: 'items', required: false, hint: '', options: [] },
+    { key: 'slika', label: 'Slika', kind: 'image', required: false, hint: '', options: [] },
+    { key: 'galerija', label: 'Galerija', kind: 'pictures', required: false, hint: '', options: [], captions: 'galerija_captions' },
+    { key: 'snimak', label: 'Snimak', kind: 'video', required: false, hint: '', options: [] },
+  ],
+};
+
+/** What Potok writes for a group's own template: its marker and HTML. */
+function customDescription(id: string, fields: Record<string, string | string[]>) {
+  const html = `<h2>${String(fields.domacin ?? '')}</h2>`;
+  const marker = JSON.stringify({ v: 1, template: id, rev: 2, fields, hash: hashOf(html) });
+  return `<!--potok-post ${marker}-->\n${html}`;
+}
 
 /** What `shrinkImage` makes of any file here, as tests have no canvas. */
 const SHRUNK = 'data:image/jpeg;base64,AAAA';
@@ -119,6 +145,19 @@ function fakeApi(posts: PotokSubgroup[] = []) {
     uploadImage: vi.fn<PotokSdk['uploadImage']>(async () => ({
       ok: true,
       file: { file: nextId, name: 'slika.jpg', size: 3, type: 'image/jpeg', url: `https://potok.test/pictures/${nextId++}` },
+    })),
+    uploadMedia: vi.fn<PotokSdk['uploadMedia']>(async () => ({
+      ok: true,
+      file: { file: nextId, name: 'gol.mp4', size: 9, type: 'video/mp4', url: `https://potok.test/pictures/${nextId++}` },
+    })),
+    listTemplates: vi.fn<PotokSdk['listTemplates']>(async () => ({ ok: true, templates: [MATCH] })),
+    renderTemplate: vi.fn<PotokSdk['renderTemplate']>(async (id, fields) => ({
+      ok: true,
+      description: customDescription(id, fields),
+      name: typeof fields.domacin === 'string' && fields.domacin ? fields.domacin : 'Utakmica',
+      html: `<h2>${String(fields.domacin ?? '')}</h2>`,
+      missing: fields.domacin ? [] : ['Domaćin'],
+      rev: 2,
     })),
   };
 }
@@ -920,5 +959,134 @@ describe('a gallery', () => {
     expect(creator.state.error).toBe('Slike trenutno ne mogu da se pošalju.');
     expect(creator.state.form!.fields.pictures).toBeUndefined();
     expect(creator.state.uploading).toBe(0);
+  });
+});
+
+describe("the group's own templates", () => {
+  it('come after the built-in formats, named by the group they come from', async () => {
+    const { creator } = await started();
+
+    expect(creator.state.customTemplates.map(({ id }) => id)).toEqual(['custom:7']);
+    expect(creator.templates().at(-1)).toMatchObject({ id: 'custom:7', name: 'Utakmica', custom: { owner: 'Liga' } });
+    expect(creator.templates().length).toBe(11);
+  });
+
+  it('leave the built-in formats working when they cannot be read', async () => {
+    const api = fakeApi();
+    api.listTemplates.mockResolvedValue({ ok: false, error: 'forbidden' });
+
+    const { creator } = await started(api);
+
+    expect(creator.state.phase).toBe('ready');
+    expect(creator.state.customTemplates).toEqual([]);
+  });
+
+  it('write a post through Potok, which renders it, its choice as the select shows it', async () => {
+    const { api, creator } = await started();
+
+    creator.pickTemplate('custom:7');
+    expect(creator.state.form?.template).toBe('custom:7');
+    expect(missingOf(creator.state.form!)).toEqual(['Domaćin']);
+
+    creator.setField('domacin', 'Zvezda');
+    creator.setField('strelci', ['Pera', 'Mika']);
+    await creator.savePost();
+
+    expect(api.renderTemplate).toHaveBeenCalledWith('custom:7', {
+      domacin: 'Zvezda',
+      strelci: ['Pera', 'Mika'],
+      ishod: 'pobeda',
+    });
+
+    const attrs = api.createChild.mock.calls[0][0];
+    expect(attrs.name).toBe('Zvezda');
+    expect(attrs.descriptionFormat).toBe('html');
+    expect(attrs.description).toContain('"template":"custom:7"');
+    expect(api.previewDescription).not.toHaveBeenCalled();
+  });
+
+  it('show their preview as Potok renders it', async () => {
+    const { api, creator } = await started();
+    creator.pickTemplate('custom:7');
+    creator.showPreview(true);
+    await vi.advanceTimersByTimeAsync(0);
+
+    creator.setField('domacin', 'Zvezda');
+    await vi.advanceTimersByTimeAsync(PREVIEW_DELAY_MS);
+
+    expect(creator.state.previewHtml).toBe('<h2>Zvezda</h2>');
+    expect(api.previewDescription).not.toHaveBeenCalled();
+  });
+
+  it('open a post made with one in its form', async () => {
+    const api = fakeApi();
+    const description = customDescription('custom:7', { domacin: 'Zvezda' });
+    api.getChild.mockResolvedValue({ ok: true, group: child(9, { description, description_format: 'html' }) });
+
+    const { creator } = await started(api);
+    await creator.openPost(child(9));
+
+    expect(creator.state.form).toMatchObject({ template: 'custom:7', fields: { domacin: 'Zvezda' }, goneTemplate: false });
+  });
+
+  it('open a post of one that is gone as free text, its look kept', async () => {
+    const api = fakeApi();
+    const description = customDescription('custom:99', { domacin: 'Zvezda' });
+    api.getChild.mockResolvedValue({ ok: true, group: child(9, { name: 'Zvezda', description, description_format: 'html' }) });
+
+    const { creator } = await started(api);
+    await creator.openPost(child(9));
+
+    expect(creator.state.form).toMatchObject({
+      template: 'text',
+      format: 'html',
+      goneTemplate: true,
+      fields: { title: 'Zvezda', source: '<h2>Zvezda</h2>' },
+    });
+  });
+
+  it('send a video from the device as it is, and a picture made small', async () => {
+    const { api, creator } = await started();
+    creator.pickTemplate('custom:7');
+
+    await creator.addDeviceMedia({ key: 'snimak', kind: 'video' }, new File(['mp4'], 'gol.mp4', { type: 'video/mp4' }));
+    expect(api.uploadMedia).toHaveBeenCalledTimes(1);
+    expect(creator.state.form?.fields.snimak).toMatch(/^https:\/\/potok\.test\/pictures\//);
+
+    await creator.addDeviceMedia({ key: 'slika', kind: 'image' }, new File(['png'], 'tim.png', { type: 'image/png' }));
+    expect(api.uploadImage).toHaveBeenCalledTimes(1);
+    expect(creator.state.form?.fields.slika).toMatch(/^https:\/\/potok\.test\/pictures\//);
+    // The first picture of a new post is the post's own too.
+    expect(creator.state.form?.pendingImage).toBe(SHRUNK);
+    expect(creator.state.uploading).toBe(0);
+  });
+
+  it('keep the pictures of a field under its own keys', async () => {
+    const { creator } = await started();
+    creator.pickTemplate('custom:7');
+
+    await creator.addDevicePictures([new File(['a'], 'a.png', { type: 'image/png' })], MATCH.fields[4]);
+    creator.setPictures(creator.state.form!.fields.galerija as string[], ['Gol'], MATCH.fields[4]);
+
+    expect(creator.state.form?.fields).toMatchObject({ galerija: [expect.stringMatching(/^https:/)], galerija_captions: ['Gol'] });
+    expect(creator.state.form?.fields.pictures).toBeUndefined();
+  });
+
+  it('are made in the settings of .feed, where its editors go from here', async () => {
+    const { api, creator } = await started();
+
+    await creator.openTemplates();
+
+    expect(api.openGroup).toHaveBeenCalledWith(own.id, { tab: 'templates' });
+  });
+
+  it('drop an unfinished post of one that is gone', async () => {
+    const storage = memoryStorage({
+      [UNSAVED_KEY]: JSON.stringify({ id: null, template: 'custom:99', fields: { domacin: 'x' }, format: 'html' }),
+    });
+
+    const { creator } = await started(fakeApi(), storage);
+
+    expect(creator.state.unsaved).toBeNull();
   });
 });

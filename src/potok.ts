@@ -333,8 +333,51 @@ export type PotokUploadedFile = {
   name: string;
   size: number;
   type: string;
-  /** Only for a picture of the app: an address anyone who sees the app opens. */
+  /** Only for a picture or video of the app: an address anyone who sees the app opens. */
   url?: string;
+};
+
+/** A field of a group's own template, as `listTemplates` gives it. */
+export type PotokTemplateField = {
+  key: string;
+  label: string;
+  kind: "text" | "textarea" | "url" | "date" | "time" | "choice" | "items" | "image" | "pictures" | "video";
+  required: boolean;
+  hint: string;
+  /** The options of a `choice`. */
+  options: string[];
+  /** For `pictures`: the key their captions go under, one for each. */
+  captions?: string;
+};
+
+/** A template of the group's own, or of a group above it, made in Potok's settings. */
+export type PotokTemplate = {
+  id: `custom:${number}`;
+  name: string;
+  purpose: string;
+  /** Goes up with every save; a description keeps the one it was made with. */
+  rev: number;
+  fields: PotokTemplateField[];
+  /** Whether it is this group's own. */
+  own: boolean;
+  /** The group it comes from, when the viewer sees it; null for the group's own. */
+  owner: string | null;
+  /** Its HTML with sample values, sanitized. */
+  thumbnail: string;
+};
+
+/** What `renderTemplate` makes of a template's fields. */
+export type PotokRenderedTemplate = {
+  ok: true;
+  /** What to save, with `descriptionFormat: "html"`. */
+  description: string;
+  /** What the post is called: its first required short text, else the template's name. */
+  name: string;
+  /** How it shows. */
+  html: string | null;
+  /** The labels of required fields still empty. */
+  missing: string[];
+  rev: number;
 };
 
 /** A change in the app's collections the viewer may see. */
@@ -496,7 +539,8 @@ export type PotokOwnGroup = {
   signed_in: boolean;
 };
 
-export type PotokGroupTab = "chat" | "description" | "settings";
+/** `templates` is the Šabloni card of the settings. */
+export type PotokGroupTab = "chat" | "description" | "settings" | "templates";
 
 /** One path of a pin's glyph (24 x 24 Heroicons, solid). */
 export type PotokPinPath = { d: string; evenodd: boolean };
@@ -814,6 +858,11 @@ export type PotokSdk = {
     file: File | Blob,
     options?: { onProgress?: (percent: number) => void },
   ): Promise<{ ok: true; file: PotokUploadedFile } | PotokError>;
+  /** For editors: a picture or a video (mp4, webm, quicktime) of the app, with an address in `file.url`. */
+  uploadMedia(
+    file: File | Blob,
+    options?: { onProgress?: (percent: number) => void },
+  ): Promise<{ ok: true; file: PotokUploadedFile } | PotokError>;
   /** Changes in the app's collections the viewer may see; returns a remover. */
   onValues<T extends object = PotokData>(
     listener: (change: PotokValueChange<T>) => void,
@@ -899,6 +948,10 @@ export type PotokSdk = {
     description: string,
     options?: { descriptionFormat?: PotokContentFormat },
   ): Promise<{ ok: true; html: string | null } | PotokError>;
+  /** For editors: the templates of the group's own and of every group above it, nearest first. */
+  listTemplates(): Promise<{ ok: true; templates: PotokTemplate[] } | PotokError>;
+  /** For editors: a description from one of those templates, rendered on the server; counts as a write. */
+  renderTemplate(id: string, fields: Record<string, string | string[]>): Promise<PotokRenderedTemplate | PotokError>;
   /** The polls of this group, the newest first, 30 per call. */
   listPolls(
     options?: PotokPollListOptions,

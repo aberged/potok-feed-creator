@@ -1,16 +1,22 @@
 import { defaultAudience, DRAFT, stateOf, type Audience } from './audience';
 import { fileOfDataUrl, shrinkImage } from './image';
-import { decodePost, encodePost, type Post } from './post';
+import { decodePost, encodePost, type Description, type Post } from './post';
 import type { PotokChild, PotokChildAttrs, PotokContentFormat, PotokError, PotokGroupTab, PotokOwnGroup, PotokSdk, PotokSubgroup } from './potok';
 import {
   fieldKeys,
   hasImageField,
+  isCustomTemplateId,
   isTemplateId,
+  knownTemplate,
   MAX_PICTURES,
   missingFields,
+  setCustomTemplates,
   templateOf,
+  TEMPLATES,
   WAITING_IMAGE,
+  type Field,
   type PostFields,
+  type Template,
   type TemplateId,
 } from './templates';
 
@@ -25,6 +31,7 @@ export const NOTICE_MS = 4_000;
 
 const FAILED_SAVE = 'Objava nije sačuvana. Pokušaj ponovo.';
 const FAILED_PICTURE = 'Slika nije poslata. Pokušaj ponovo.';
+const FAILED_VIDEO = 'Video nije poslat. Pokušaj ponovo.';
 const UNREADABLE_PICTURE = 'Ta slika ne može da se pročita. Izaberi drugu.';
 const SLOW_SAVE = 'Veza je spora, pa ne znamo da li je sve sačuvano. Pogledaj pregled i sačuvaj još jednom.';
 
@@ -51,6 +58,8 @@ export type Form = {
   clearPicture: boolean;
   /** What the post was made from, when its text was changed by hand since. */
   changedPost: Post | null;
+  /** The group's own template it was made with is gone, so it opened as free text. */
+  goneTemplate: boolean;
 };
 
 export type Unsaved = Pick<Form, 'id' | 'template' | 'fields' | 'format' | 'clearPicture'>;
@@ -61,6 +70,8 @@ export type CreatorState = {
   group: PotokOwnGroup | null;
   profileId: number | null;
   posts: PotokSubgroup[];
+  /** The templates of the group's own and of the groups above it (`listTemplates`). */
+  customTemplates: Template[];
   hasMore: boolean;
   loadingMore: boolean;
   /** A post left unfinished last time. */
@@ -85,11 +96,14 @@ type CreatorApi = Pick<
   | 'updateChild'
   | 'withdrawChild'
   | 'previewDescription'
+  | 'listTemplates'
+  | 'renderTemplate'
   | 'openGroup'
   | 'getConfig'
   | 'saveConfig'
   | 'ensureFileGroups'
   | 'uploadImage'
+  | 'uploadMedia'
 >;
 
 type CreatorStorage = Pick<Storage, 'getItem' | 'setItem' | 'removeItem'>;
@@ -107,15 +121,43 @@ export const isDraft = (form: Pick<Form, 'audience'>) => stateOf(form.audience) 
 const withPendingImage = (form: Form): PostFields =>
   form.pendingImage && hasImageField(templateOf(form.template)) ? { ...form.fields, image: WAITING_IMAGE } : form.fields;
 
+/** A choice of a group's own template left as it opened is its first option, as its select shows. */
+export function withChoices(form: Pick<Form, 'template' | 'fields'>): PostFields {
+  const fields = { ...form.fields };
+
+  for (const field of templateOf(form.template).fields) {
+    const value = fields[field.key];
+    const first = field.options?.[0]?.value;
+    if (field.kind === 'choice' && first !== undefined && !(typeof value === 'string' && value !== '')) {
+      fields[field.key] = first;
+    }
+  }
+
+  return fields;
+}
+
 /** The required fields still empty, by their labels. */
 export function missingOf(form: Form): string[] {
   return missingFields(templateOf(form.template), withPendingImage(form));
 }
 
-/** The pictures of a gallery and their captions, as many of one as of the other. */
-export function pictureRows(fields: PostFields): { pictures: string[]; captions: string[] } {
-  const pictures = Array.isArray(fields.pictures) ? [...fields.pictures] : [];
-  const stored = Array.isArray(fields.captions) ? fields.captions : [];
+/** The gallery's field of pictures, which the older calls without a field mean. */
+const GALLERY_PICTURES = templateOf('gallery').fields.find(({ kind }) => kind === 'pictures')!;
+
+/** The keys a field of pictures keeps its addresses and captions under. */
+const pictureKeys = (field: Pick<Field, 'key' | 'captions'> = GALLERY_PICTURES) => ({
+  key: field.key,
+  captions: field.captions ?? `${field.key}_captions`,
+});
+
+/** The pictures of a field (a gallery's by default) and their captions, as many of one as of the other. */
+export function pictureRows(
+  fields: PostFields,
+  field: Pick<Field, 'key' | 'captions'> = GALLERY_PICTURES,
+): { pictures: string[]; captions: string[] } {
+  const keys = pictureKeys(field);
+  const pictures = Array.isArray(fields[keys.key]) ? [...(fields[keys.key] as string[])] : [];
+  const stored = Array.isArray(fields[keys.captions]) ? (fields[keys.captions] as string[]) : [];
 
   return { pictures, captions: pictures.map((_picture, index) => stored[index] ?? '') };
 }
@@ -137,6 +179,8 @@ function readUnsaved(storage: CreatorStorage): Unsaved | null {
 
     const { id, template, fields, format, clearPicture } = stored as Partial<Unsaved>;
     if (!isTemplateId(template) || !fields || typeof fields !== 'object') return null;
+    // A group's own template that is gone takes the unfinished post with it.
+    if (!knownTemplate(template)) return null;
 
     return {
       id: id ?? null,
@@ -157,6 +201,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
     group: null,
     profileId: null,
     posts: [],
+    customTemplates: [],
     hasMore: false,
     loadingMore: false,
     unsaved: null,
@@ -214,10 +259,15 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
     const profile = await api.getCurrentProfile().catch(() => null);
     const listed = await fetchPosts();
 
+    // Without them the built-in formats still work, and a post of one opens as free text.
+    const catalog = await api.listTemplates().catch(() => null);
+    const customTemplates = setCustomTemplates(catalog?.ok ? catalog.templates : []);
+
     update({
       phase: listed ? 'ready' : 'failed',
       group,
       profileId: profile?.id ?? null,
+      customTemplates,
       unsaved: readUnsaved(storage),
     });
   };
@@ -255,6 +305,27 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
 
   const postOf = ({ template, fields }: Form): Post => ({ template, fields });
 
+  /** What the post's group is called, as the save will name it. */
+  const nameOf = (form: Form): string => {
+    if (!isCustomTemplateId(form.template)) return encodePost(postOf(form), form.format).name;
+
+    const template = templateOf(form.template);
+    return template.title(form.fields) || template.name;
+  };
+
+  /**
+   * The post's description: a built-in format writes it here, a group's own
+   * template on the server, the one place it becomes HTML.
+   */
+  const describe = async (form: Form): Promise<({ ok: true } & Description) | PotokError> => {
+    if (!isCustomTemplateId(form.template)) return { ok: true, ...encodePost(postOf(form), form.format) };
+
+    const reply = await api.renderTemplate(form.template, withChoices(form));
+    if (!reply.ok) return reply;
+
+    return { ok: true, name: reply.name, description: reply.description, descriptionFormat: 'html' };
+  };
+
   /** The picture from the device has no address yet, so the text stands in one. */
   const previewOf = (form: Form) => encodePost({ template: form.template, fields: withPendingImage(form) }, form.format);
 
@@ -263,6 +334,13 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
     if (!form) return;
 
     const run = ++previewRun;
+
+    if (isCustomTemplateId(form.template)) {
+      const rendered = await api.renderTemplate(form.template, withChoices(form)).catch(() => null);
+      if (run === previewRun && rendered?.ok) update({ previewHtml: rendered.html });
+      return;
+    }
+
     const { description, descriptionFormat } = previewOf(form);
     const reply = await api.previewDescription(description, { descriptionFormat }).catch(() => null);
 
@@ -301,6 +379,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
     pendingImage: null,
     clearPicture: false,
     changedPost: null,
+    goneTemplate: false,
   });
 
   const formOf = (child: PotokChild): Form => {
@@ -311,6 +390,15 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
       audience: audienceOf(child),
       memberCount: child.member_count,
     };
+
+    // A group's own template that is gone, or not this group's, leaves its
+    // post as text: its HTML stays as it is, without the marker.
+    if (decoded.kind !== 'free' && !knownTemplate(decoded.post.template)) {
+      const source =
+        decoded.kind === 'changed' ? decoded.source : (child.description ?? '').replace(/^<!--potok-post [\s\S]*?-->\n?/, '');
+
+      return { ...base, fields: { title: child.name, source }, format: 'html', goneTemplate: true };
+    }
 
     if (decoded.kind === 'post') {
       return { ...base, template: decoded.post.template, fields: decoded.post.fields };
@@ -348,7 +436,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
 
     if (current.pendingImage) {
       const picture = current.pendingImage;
-      const { name } = encodePost(postOf(current), current.format);
+      const name = nameOf(current);
 
       const reply = await (current.id === null
         ? api.createChild({ name, picture })
@@ -370,7 +458,11 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
       update({ form: current });
     }
 
-    const attrs = { ...encodePost(postOf(current), current.format), ...audience };
+    const described = await describe(current);
+    if (!described.ok) return described;
+
+    const { name, description, descriptionFormat } = described;
+    const attrs = { name, description, descriptionFormat, ...audience };
     const clearing: PotokChildAttrs = current.clearPicture ? { picture: '' } : {};
 
     return current.id === null ? api.createChild(attrs) : api.updateChild(current.id, { ...attrs, ...clearing });
@@ -380,7 +472,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
   const adoptCreated = async (form: Form) => {
     if (form.id !== null || state.form?.id !== null) return;
 
-    const { name } = encodePost(postOf(form), form.format);
+    const name = nameOf(form);
     const reply = await api.listChildren({ limit: PAGE_SIZE }).catch(() => null);
     if (!reply?.ok) return;
 
@@ -426,6 +518,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
         memberCount: child.member_count,
         clearPicture: false,
         changedPost: null,
+        goneTemplate: false,
       },
     });
 
@@ -465,14 +558,20 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
   };
 
   /**
-   * A sent picture takes the first empty row, or a new one. The first row's
-   * picture also goes to the post's own, for its card and the lists.
+   * Whether a picture from the device becomes the post's own, for its card and
+   * the lists: a gallery's first, and for a group's own template the first one
+   * of a new post.
    */
-  const placePicture = (address: string, picture: string) => {
+  const ownPicture = (form: Form, index: number) =>
+    isCustomTemplateId(form.template) ? form.id === null && !form.pendingImage : index === 0;
+
+  /** A sent picture takes the first empty row of its field, or a new one. */
+  const placePicture = (field: Pick<Field, 'key' | 'captions'>, address: string, picture: string) => {
     const form = state.form;
     if (!form) return;
 
-    const { pictures, captions } = pictureRows(form.fields);
+    const keys = pictureKeys(field);
+    const { pictures, captions } = pictureRows(form.fields, field);
     let index = pictures.findIndex((row) => row.trim() === '');
 
     if (index === -1) {
@@ -483,7 +582,27 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
     }
 
     pictures[index] = address;
-    changed({ fields: { ...form.fields, pictures, captions }, ...(index === 0 ? { pendingImage: picture } : {}) });
+    changed({
+      fields: { ...form.fields, [keys.key]: pictures, [keys.captions]: captions },
+      ...(ownPicture(form, index) ? { pendingImage: picture } : {}),
+    });
+  };
+
+  /** A picture from the device, made small, sent to the "Files" group; its address, or null. */
+  const sendPicture = async (file: File): Promise<{ url: string; picture: string } | null> => {
+    const picture = await shrinkImage(file);
+    if (!picture) {
+      fail(UNREADABLE_PICTURE);
+      return null;
+    }
+
+    const name = `${file.name.replace(/\.[^.]*$/, '') || 'slika'}.jpg`;
+    const reply = await api.uploadImage(fileOfDataUrl(picture, name)).catch(() => null);
+
+    if (reply?.ok && reply.file.url) return { url: reply.file.url, picture };
+
+    fail(reply && !reply.ok ? failureOf(reply) : FAILED_PICTURE);
+    return null;
   };
 
   const backToList = () => {
@@ -513,6 +632,9 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
       update({ screen: 'templates', error: null, notice: null });
     },
 
+    /** Every format to choose from: the built-in ones, then the group's own. */
+    templates: (): Template[] => [...TEMPLATES, ...state.customTemplates],
+
     /** For a new post, or another format for the one being written: fields of the same name stay. */
     pickTemplate(template: TemplateId) {
       const { form } = state;
@@ -525,7 +647,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
           .filter(([, value]) => value !== undefined),
       );
 
-      openForm({ ...form, template, fields, changedPost: null });
+      openForm({ ...form, template, fields, changedPost: null, goneTemplate: false });
       rememberSoon();
     },
 
@@ -561,7 +683,7 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
       const child = await fetchChild(unsaved.id);
       if (!child) return clearUnsaved();
 
-      openForm({ ...formOf(child), ...unsaved, changedPost: null });
+      openForm({ ...formOf(child), ...unsaved, changedPost: null, goneTemplate: false });
     },
 
     discardUnsaved: clearUnsaved,
@@ -574,16 +696,18 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
       changed({ pendingImage });
     },
 
-    /** The rows of a gallery, as the form holds them. */
-    setPictures(pictures: string[], captions: string[]) {
-      if (state.form) changed({ fields: { ...state.form.fields, pictures, captions } });
+    /** The rows of a field of pictures (a gallery's by default), as the form holds them. */
+    setPictures(pictures: string[], captions: string[], field?: Pick<Field, 'key' | 'captions'>) {
+      const keys = pictureKeys(field);
+      if (state.form) changed({ fields: { ...state.form.fields, [keys.key]: pictures, [keys.captions]: captions } });
     },
 
     /**
-     * Pictures from the device for a gallery: each goes up at once, made
-     * small, and its address goes into the form. Saving waits for them.
+     * Pictures from the device for a field of pictures (a gallery's by
+     * default): each goes up at once, made small, and its address goes into
+     * the form. Saving waits for them.
      */
-    async addDevicePictures(files: File[]) {
+    async addDevicePictures(files: File[], field?: Pick<Field, 'key' | 'captions'>) {
       if (!state.form || files.length === 0) return;
 
       update({ uploading: state.uploading + files.length, error: null });
@@ -592,20 +716,50 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
         if (!(await readyForUploads())) return fail('Slike trenutno ne mogu da se pošalju.');
 
         for (const file of files) {
-          const picture = await shrinkImage(file);
-          if (!picture) {
-            fail(UNREADABLE_PICTURE);
-            continue;
-          }
-
-          const name = `${file.name.replace(/\.[^.]*$/, '') || 'slika'}.jpg`;
-          const reply = await api.uploadImage(fileOfDataUrl(picture, name)).catch(() => null);
-
-          if (reply?.ok && reply.file.url) placePicture(reply.file.url, picture);
-          else fail(reply && !reply.ok ? failureOf(reply) : FAILED_PICTURE);
+          const sent = await sendPicture(file);
+          if (sent) placePicture(field ?? GALLERY_PICTURES, sent.url, sent.picture);
         }
       } finally {
         update({ uploading: Math.max(0, state.uploading - files.length) });
+      }
+    },
+
+    /**
+     * A picture or a video from the device for one field of a group's own
+     * template: it goes up at once, a picture made small and a video as it
+     * is, and its address goes into the field. Saving waits for it.
+     */
+    async addDeviceMedia(field: Pick<Field, 'key' | 'kind'>, file: File) {
+      if (!state.form) return;
+
+      update({ uploading: state.uploading + 1, error: null });
+
+      try {
+        if (!(await readyForUploads())) return fail('Fajl trenutno ne može da se pošalje.');
+
+        if (field.kind === 'video') {
+          const reply = await api.uploadMedia(file).catch(() => null);
+
+          if (reply?.ok && reply.file.url && state.form) {
+            changed({ fields: { ...state.form.fields, [field.key]: reply.file.url } });
+          } else {
+            fail(reply && !reply.ok ? failureOf(reply) : FAILED_VIDEO);
+          }
+
+          return;
+        }
+
+        const sent = await sendPicture(file);
+        const form = state.form;
+
+        if (sent && form) {
+          changed({
+            fields: { ...form.fields, [field.key]: sent.url },
+            ...(ownPicture(form, 0) ? { pendingImage: sent.picture } : {}),
+          });
+        }
+      } finally {
+        update({ uploading: Math.max(0, state.uploading - 1) });
       }
     },
 
@@ -677,6 +831,15 @@ export function createCreator(api: CreatorApi, storage: CreatorStorage, onChange
     },
 
     backToList,
+
+    /** Leaves for the Šabloni card of `.feed`'s settings, where its editors make its templates. */
+    async openTemplates() {
+      const id = state.group?.id;
+      if (id === undefined) return;
+
+      const reply = await api.openGroup(id, { tab: 'templates' }).catch(() => null);
+      if (!reply?.ok) fail('Ta strana trenutno ne može da se otvori.');
+    },
 
     /** Leaves for the group's chat, settings or, for a parent, its page. The app ends with the page. */
     async leaveFor(id: number, tab?: PotokGroupTab) {

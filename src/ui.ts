@@ -15,7 +15,9 @@ import { safeImage } from './html';
 import { shrinkImage } from './image';
 import type { PotokSubgroup } from './potok';
 import {
+  isCustomTemplateId,
   LEVEL_OPTIONS,
+  LOOKS,
   MAX_ITEMS,
   MAX_PICTURES,
   TEMPLATES,
@@ -197,6 +199,14 @@ const listScreen = (creator: Creator, state: CreatorState) => {
 
 // --- The list of formats
 
+// A built-in format draws its picture here; a group's own comes drawn by
+// Potok, sanitized, with its sample values.
+const thumbnailOf = (template: Template) => {
+  if (template.custom) return unsafeHTML(template.custom.thumbnail);
+  if (template.id === 'text') return html`<p>${template.sample.source}</p>`;
+  return unsafeHTML(withImage(template.render(template.sample), SAMPLE_IMAGE));
+};
+
 const templateCard = (creator: Creator, template: Template, current: boolean) => html`
   <button
     class="fc-template ${current ? 'fc-template-current' : ''}"
@@ -204,30 +214,52 @@ const templateCard = (creator: Creator, template: Template, current: boolean) =>
     @click=${() => creator.pickTemplate(template.id)}
   >
     <span class="fc-thumb" aria-hidden="true">
-      <span class="fc-thumb-page rich-content">
-        ${template.id === 'text'
-          ? html`<p>${template.sample.source}</p>`
-          : unsafeHTML(withImage(template.render(template.sample), SAMPLE_IMAGE))}
-      </span>
+      <span class="fc-thumb-page rich-content">${thumbnailOf(template)}</span>
     </span>
     <span class="px-3 pt-2 font-medium">${template.name}</span>
-    <span class="px-3 pb-3 text-sm opacity-70">${template.purpose}</span>
+    <span class="px-3 ${template.custom?.owner ? 'pb-1' : 'pb-3'} text-sm opacity-70">${template.purpose}</span>
+    ${template.custom?.owner
+      ? html`<span class="mx-3 mb-3 self-start rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+          ${template.custom.owner}
+        </span>`
+      : nothing}
   </button>
 `;
 
-const templatesScreen = (creator: Creator, state: CreatorState) => html`
-  <header class="fc-header">
-    <button class="d-btn d-btn-ghost d-btn-sm d-btn-square" aria-label="Nazad" @click=${() => creator.leaveTemplates()}>
-      ${backIcon}
-    </button>
-    <h1 class="min-w-0 flex-1 truncate text-lg font-semibold">Izaberi format</h1>
-  </header>
-  <main class="fc-scroll">
-    <div id="templates" class="fc-column fc-template-grid">
-      ${TEMPLATES.map((template) => templateCard(creator, template, state.form?.template === template.id))}
-    </div>
-  </main>
-`;
+const templatesScreen = (creator: Creator, state: CreatorState) => {
+  const own = state.customTemplates;
+  const current = state.form?.template;
+
+  return html`
+    <header class="fc-header">
+      <button class="d-btn d-btn-ghost d-btn-sm d-btn-square" aria-label="Nazad" @click=${() => creator.leaveTemplates()}>
+        ${backIcon}
+      </button>
+      <h1 class="min-w-0 flex-1 truncate text-lg font-semibold">Izaberi format</h1>
+      <button id="open-templates" class="d-btn d-btn-ghost d-btn-sm" @click=${() => void creator.openTemplates()}>
+        ${settingsIcon} Šabloni grupe
+      </button>
+    </header>
+    <main class="fc-scroll">
+      <div id="templates" class="fc-column fc-template-grid">
+        ${TEMPLATES.map((template) => templateCard(creator, template, current === template.id))}
+      </div>
+      <div class="fc-column max-w-[56rem] pt-2 pb-0">
+        <h2 class="text-base font-semibold">Šabloni grupe</h2>
+        <p class="fc-hint">
+          ${own.length > 0
+            ? 'Ove šablone urednici prave u podešavanjima ove grupe ili grupa iznad nje, a Potok ih ispisuje.'
+            : 'Svoje šablone, sa poljima i HTML-om, urednici prave u podešavanjima grupe, na kartici Šabloni. Važe i za grupe ispod nje.'}
+        </p>
+      </div>
+      ${own.length > 0
+        ? html`<div id="custom-templates" class="fc-column fc-template-grid">
+            ${own.map((template) => templateCard(creator, template, current === template.id))}
+          </div>`
+        : nothing}
+    </main>
+  `;
+};
 
 // --- The editor
 
@@ -296,6 +328,76 @@ const imageField = (creator: Creator, form: Form, field: Field) => {
   `;
 };
 
+/** An address a video tag takes: http and https only, as Potok's sanitizer keeps. */
+const safeVideo = (value: string) => (/^https?:\/\/\S+$/i.test(value.trim()) ? value.trim() : '');
+
+// A picture or a video of a group's own template: an address, or a file from
+// the device that goes to the "Files" group and gives one.
+const mediaField = (creator: Creator, form: Form, field: Field) => {
+  const video = field.kind === 'video';
+  const address = textValue(form, field.key);
+  const shown = video ? safeVideo(address) : safeImage(address);
+  const uploading = creator.state.uploading > 0;
+
+  const picked = (event: Event) => {
+    const input = event.target as HTMLInputElement;
+    const file = input.files?.[0];
+    input.value = '';
+    if (file) void creator.addDeviceMedia(field, file);
+  };
+
+  return html`
+    <div class="fc-field" data-field=${field.key}>
+      <span class="fc-label">${field.label}${field.required ? html`<span aria-hidden="true"> *</span>` : nothing}</span>
+      ${shown
+        ? video
+          ? html`<video class="max-h-56 w-full rounded-box bg-black" src=${shown} controls preload="metadata" playsinline></video>`
+          : html`<img class="max-h-40 self-start rounded-box object-cover" src=${shown} alt="" />`
+        : nothing}
+      <div class="flex flex-wrap gap-2">
+        <input
+          class="d-input min-w-40 flex-1"
+          type="url"
+          inputmode="url"
+          placeholder="https://"
+          aria-label=${video ? 'Adresa videa' : 'Adresa slike'}
+          .value=${address}
+          @input=${(event: Event) => creator.setField(field.key, (event.target as HTMLInputElement).value)}
+        />
+        ${address
+          ? html`<button
+              type="button"
+              class="d-btn d-btn-ghost d-btn-square"
+              aria-label=${video ? 'Ukloni video' : 'Ukloni sliku'}
+              @click=${() => creator.setField(field.key, '')}
+            >
+              ${closeIcon}
+            </button>`
+          : nothing}
+        <label class="d-btn d-btn-outline ${uploading ? 'd-btn-disabled' : ''}">
+          Sa uređaja
+          <input
+            class="hidden"
+            type="file"
+            accept=${video ? 'video/mp4,video/webm,video/quicktime' : 'image/*'}
+            ?disabled=${uploading}
+            @change=${picked}
+          />
+        </label>
+      </div>
+      ${uploading
+        ? html`<span class="fc-hint" data-uploading=${field.key}>${video ? 'Šaljem video...' : 'Šaljem sliku...'}</span>`
+        : nothing}
+      ${field.hint ? html`<span class="fc-hint">${field.hint}</span>` : nothing}
+      <span class="fc-hint">
+        ${video
+          ? 'Video sa uređaja ide u podgrupu Fajlovi, a njegova adresa se otvara bez prijave.'
+          : 'Slika sa uređaja ide u podgrupu Fajlovi, a njena adresa se otvara bez prijave.'}
+      </span>
+    </div>
+  `;
+};
+
 const itemsField = (creator: Creator, form: Form, field: Field) => {
   const stored = form.fields[field.key];
   const rows = Array.isArray(stored) && stored.length > 0 ? stored : [''];
@@ -340,7 +442,7 @@ const itemsField = (creator: Creator, form: Form, field: Field) => {
       <button
         type="button"
         class="d-btn d-btn-ghost d-btn-sm self-start"
-        ?disabled=${rows.length >= MAX_ITEMS}
+        ?disabled=${rows.length >= (field.max ?? MAX_ITEMS)}
         @click=${() => creator.setField(field.key, [...rows, ''])}
       >
         ${plusIcon} Dodaj stavku
@@ -386,6 +488,21 @@ const choiceField = (creator: Creator, form: Form, field: Field) => {
   const options = field.options ?? [];
   const value = textValue(form, field.key);
   const current = options.some((option) => option.value === value) ? value : options[0]?.value;
+  const looks = options.length > 0 && options.every((option) => LOOKS.some((look) => look.value === option.value));
+
+  // A choice of a group's own template is a select; a gallery's look, tiles.
+  if (!looks) {
+    return fieldShell(
+      field,
+      html`<select
+        class="d-select w-full"
+        data-field=${field.key}
+        @change=${(event: Event) => creator.setField(field.key, (event.target as HTMLSelectElement).value)}
+      >
+        ${options.map((option) => html`<option value=${option.value} ?selected=${option.value === current}>${option.label}</option>`)}
+      </select>`,
+    );
+  }
 
   return html`
     <fieldset class="fc-field" data-field=${field.key}>
@@ -420,7 +537,7 @@ const choiceField = (creator: Creator, form: Form, field: Field) => {
 // The pictures of a gallery, each with its caption: an address, or from the
 // device, several at once, sent as soon as they are picked.
 const picturesField = (creator: Creator, form: Form, field: Field) => {
-  const rows = pictureRows(form.fields);
+  const rows = pictureRows(form.fields, field);
   const pictures = rows.pictures.length > 0 ? rows.pictures : [''];
   const captions = rows.pictures.length > 0 ? rows.captions : [''];
   const uploading = creator.state.uploading > 0;
@@ -430,13 +547,14 @@ const picturesField = (creator: Creator, form: Form, field: Field) => {
     creator.setPictures(
       pictures.map((row, position) => (position === index ? picture : row)),
       captions.map((row, position) => (position === index ? caption : row)),
+      field,
     );
 
   const picked = (event: Event) => {
     const input = event.target as HTMLInputElement;
     const files = Array.from(input.files ?? []).slice(0, room);
     input.value = '';
-    void creator.addDevicePictures(files);
+    void creator.addDevicePictures(files, field);
   };
 
   return html`
@@ -478,6 +596,7 @@ const picturesField = (creator: Creator, form: Form, field: Field) => {
                   creator.setPictures(
                     pictures.filter((_row, position) => position !== index),
                     captions.filter((_row, position) => position !== index),
+                    field,
                   )}
               >
                 ${closeIcon}
@@ -491,7 +610,7 @@ const picturesField = (creator: Creator, form: Form, field: Field) => {
           type="button"
           class="d-btn d-btn-ghost d-btn-sm"
           ?disabled=${pictures.length >= MAX_PICTURES}
-          @click=${() => creator.setPictures([...pictures, ''], [...captions, ''])}
+          @click=${() => creator.setPictures([...pictures, ''], [...captions, ''], field)}
         >
           ${plusIcon} Dodaj sliku
         </button>
@@ -508,8 +627,10 @@ const picturesField = (creator: Creator, form: Form, field: Field) => {
         </label>
         ${uploading ? html`<span id="pictures-uploading" class="fc-hint">Šaljem slike...</span>` : nothing}
       </div>
+      ${field.hint ? html`<span class="fc-hint">${field.hint}</span>` : nothing}
       <span class="fc-hint">
-        Slike sa uređaja idu u podgrupu Fajlovi, a njihove adrese se otvaraju bez prijave. Prva postaje i slika objave.
+        Slike sa uređaja idu u podgrupu Fajlovi, a njihove adrese se otvaraju bez prijave.
+        ${isCustomTemplateId(form.template) ? 'Prva slika nove objave postaje i njena slika.' : 'Prva postaje i slika objave.'}
       </span>
     </div>
   `;
@@ -521,7 +642,9 @@ const fieldView = (creator: Creator, form: Form, field: Field) => {
 
   switch (field.kind) {
     case 'image':
-      return imageField(creator, form, field);
+      return isCustomTemplateId(form.template) ? mediaField(creator, form, field) : imageField(creator, form, field);
+    case 'video':
+      return mediaField(creator, form, field);
     case 'items':
       return itemsField(creator, form, field);
     case 'choice':
@@ -574,6 +697,16 @@ const changedCard = (creator: Creator, form: Form) =>
             Vrati na šablon ${templateOf(form.changedPost.template).name}
           </button>
         </div>
+      `
+    : nothing;
+
+const goneCard = (form: Form) =>
+  form.goneTemplate
+    ? html`
+        <p id="gone-template" class="fc-setup text-sm">
+          Šablona ove objave više nema, ili ga ova grupa ne može da koristi, pa je otvorena kao slobodan tekst. Izgled
+          ostaje kakav je bio.
+        </p>
       `
     : nothing;
 
@@ -873,7 +1006,7 @@ const editorScreen = (creator: Creator, state: CreatorState, ui: Ui, draw: () =>
       <div class="fc-editor" data-tab=${ui.tab}>
         <form id="post-form" class="fc-form" @submit=${(event: Event) => event.preventDefault()}>
           <fieldset class="flex flex-col gap-4" ?disabled=${state.saving}>
-            ${changedCard(creator, form)} ${closedWithOthers(form)}
+            ${changedCard(creator, form)} ${goneCard(form)} ${closedWithOthers(form)}
             ${template.fields.map((field) => fieldView(creator, form, field))} ${linksView(creator, form)}
           </fieldset>
         </form>

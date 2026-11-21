@@ -18,6 +18,8 @@ const VALUED_ATTRIBUTES = new Map([['div data-potok-gallery', new Set(['slides',
 const PLAIN_TAGS = new Map([
   ['a', new Set(['href', 'target', 'rel', 'name', 'title'])],
   ['img', new Set(['src', 'width', 'height', 'title', 'alt'])],
+  // `src` and `poster` http(s) only, `preload` none or metadata: no built-in format uses one.
+  ['video', new Set(['src', 'poster', 'controls', 'playsinline', 'preload', 'width', 'height', 'title'])],
   ['br', new Set()],
   ['hr', new Set()],
 ]);
@@ -130,7 +132,9 @@ describe('what the sanitizer lets through', () => {
     expect(refusedCss('width: 100%; font-weight: 700; border-radius: 99px; line-height: 1.15')).toEqual([]);
     expect(refusedMarkup('<div class="a"></div>')).toEqual(['div class']);
     expect(refusedMarkup('<img style="width: 50%" src="/a">')).toEqual(['img style']);
-    expect(refusedMarkup('<video></video>')).toEqual(['<video>']);
+    expect(refusedMarkup('<audio></audio>')).toEqual(['<audio>']);
+    expect(refusedMarkup('<video controls="controls" src="https://a.b/c.mp4"></video>')).toEqual([]);
+    expect(refusedMarkup('<video autoplay="autoplay"></video>')).toEqual(['video autoplay']);
     expect(refusedMarkup('<div data-potok-gallery="cards"></div>')).toEqual([]);
     expect(refusedMarkup('<div data-potok-gallery="fixed"></div>')).toEqual(['div data-potok-gallery="fixed"']);
     expect(refusedMarkup('<p data-potok-gallery="cards"></p>')).toEqual(['p data-potok-gallery']);
